@@ -172,12 +172,14 @@ self-check (pattern: `checkBookmarkLabelValidation()` in `bookmark.swift`) cover
 - OSC route parsing: every legacy and scoped form, extra/empty segments, reserved names, index
   0 / negative / out of range, unknown slug.
 
-## Open questions (ask the user before phase 1)
+## Decisions (user, 2026-09-25)
 
-1. Preview: tiles of all outputs (likely required by the spike) vs one large selected preview?
-2. Is a cap of 4 outputs enough, and what mix of 720p / 1080p is expected in a show?
-3. Keep `--profile` instances once multi-output works, or remove them?
-4. Skip capturing outputs that have no Syphon clients (saves CPU), or always capture?
+1. Preview: **tiles of all outputs**, click to select. No separate large preview.
+2. Count: **cap of 4, typically 2**. Resolution mix not fixed; the spike's table decides what's
+   supported at 60 fps.
+3. **Keep `--profile`** instances alongside multi-output.
+4. Idle capture: **per-output toggle** "Capture without clients" (default on), in that output's
+   settings.
 
 ## Verification rules (carry over)
 
@@ -192,3 +194,121 @@ self-check (pattern: `checkBookmarkLabelValidation()` in `bookmark.swift`) cover
   `SyphonMetalClient(serverDescription:device:options:newFrameHandler:)` counts frames.
 - OSC tests: raw UDP via python3 (address, type tags `,s` `,i` `,f` `,h`, NUL-padded to 4 bytes).
 - Agents can't click the UI; list unverified interactions for the user.
+
+## Phase 0 findings (2026-09-25)
+
+Spike source: `/tmp/syphonweb-spike/main.swift` (standalone AppKit app, `key=value` args, e.g.
+`./spike case=tiles dsf=1 n=2 res=1080,720 driver=dl`; `./spike client secs=5` counts frames per
+`Spike N` server). Capture path copied from the product: RGBA premultipliedLast DeviceRGB
+`CGContext`, CTM scaled, `layer.render(in:)`, `texture.replace`, `publishFrameTexture`, one shared
+`MTLCommandQueue`, one server per output, `_layoutMode = 2` + `_viewScale`. Driver: one 60 Hz
+tick on the main run loop in `.common`, all outputs captured serially.
+
+Machine: M1 Max, macOS 15.7.9, main window on a 2x screen (4K at 1920x1080 pt). Test page: rAF
+counter encoded as 24 bit cells + large text + moving block. **Fresh fps** = captures whose decoded
+counter differs from the previous capture. **Sharp** = adjacent-pixel contrast on a 1 px stripe
+pattern (1.00 = 1:1 with output pixels, 0.50 = upscaled from half resolution). `ms` = per-output
+`getFrame` (render + replace); publish was 0.03–0.08 ms everywhere and is omitted.
+
+### Cases (2 outputs, 720p each; per output unless noted)
+
+| Case | rAF | Fresh fps | Published | ms p50 / p95 | Sharp | Tick p95 | Verdict |
+|---|---|---|---|---|---|---|---|
+| 1. Tiles 480x270 pt, `_viewScale` only | 60 | 60 | 60 | 3.4 / 3.5 | **0.50** | 7.2 | paints, but half-res |
+| 1. Tiles 480x270 pt + `_overrideDeviceScaleFactor` = out px / tile pt | 60 | 59.7–60 | 60 | 3.6 / 3.9 | 1.00 | 7.7 | **works** |
+| 2. Stacked, non-selected occluded by sibling | 60 | 59.8–60 | 60 | 3.6 / 3.8 | 1.00 | 7.7 | works |
+| 3a. Non-selected `alphaValue = 0.01` | 60 | 45–57 | 60 | **10.9 / 11.3** | 0.67 | 15.3 | no: 3x cost, alpha baked into capture |
+| 3b. Non-selected `isHidden = true` | **0** | 0 | 60 | 0.7 / 0.8 | – | 4.7 | no: blank frames |
+| 4a. Non-selected in borderless window at (-20000, -20000) | **0** | 0 | 60 | 3.5 / 3.6 | 1.00 | 7.4 | no: frozen |
+| 4b. Non-selected in borderless window, `alphaValue = 0`, on screen | 60 | 54–60 | 60 | 3.6 / 3.8 | 1.00 | 7.6 | works |
+
+Case 5 (inactive = Finder frontmost; partial = another app's window over the right 75 % of the
+main window, incl. one whole tile; full = main window fully covered):
+
+| Case | rAF | Fresh fps | Tick p95 | Verdict |
+|---|---|---|---|---|
+| Tiles, inactive | 60 | 58.4–60 | 7.9–8.2 | works |
+| Tiles, partially covered (tile 2 fully hidden) | 60 | 60 | 7.7 | works (throttling is per window, not per view) |
+| Tiles, fully covered (active or inactive) | **0** | 0 | 7.8 | frozen |
+| Stacked, inactive | 60 | 49–51 | 7.8 | works, one noisy run |
+| Stacked, fully covered | **0** | 0 | 7.7 | frozen |
+| **Today's product shape** (1 output, fully covered) | **0** | 0 | 3.9 | frozen — pre-existing |
+| 4b alpha-0 window, main window fully covered | 60 (alpha-0 window) / 0 (main) | 60 / 0 | 7.8 | the alpha-0 window keeps painting |
+| All outputs in an alpha-0 window at `.screenSaver` level, whole screen covered, inactive | 60 | 60 | 9.6 | works; tiles show captured `CGImage`s |
+| Anything with the screen locked / display asleep | **0** | 0 | – | frozen (lock shield occludes everything) |
+
+### Budget (winning case: tiles + device-scale override, display-link driver)
+
+| Outputs | Tick p50 / p95 ms | Ticks/s | rAF | Fresh fps per output | Main-process CPU |
+|---|---|---|---|---|---|
+| 1 × 720p | 3.7 / 3.8 | 60 | 60 | 59.9 | 25 % |
+| 2 × 720p | 7.3 / 7.7 | 60 | 60 | 60 | 50 % |
+| 3 × 720p | 10.9 / 11.7 | 60 | 60 | 58.8 | 74 % |
+| 4 × 720p | 14.6 / 15.2 | 60 | 60 | **46.7** | 97 % |
+| 1 × 1080p | 8.1 / 8.4 | 60 | 60 | 60 | 52 % |
+| 2 × 1080p | 17.8 / 18.9 | **54** | 54 | **54** | 102 % |
+| 3 × 1080p * | 23.7 / 26.1 | 40 | – | ≤ 40 | 99 % |
+| 4 × 1080p * | 31.3 / 32.8 | 32 | – | ≤ 32 | 102 % |
+| 1080p + 720p * | 11.4 / 12.2 | 60 | – | – | 71 % |
+| 1080p + 2 × 720p * | 14.8 / 15.6 | 60 | – | – | 92 % |
+| 2 × 1080p + 2 × 720p * | 23.1 / 24.4 | 42 | – | ≤ 42 | 100 % |
+
+\* Measured after the screen locked (the user was away): capture cost is valid (unlocked vs locked
+agreed within 0.1 ms on 2 × 720p and 1 × 1080p), but rAF/freshness could not be measured. Treat
+fresh fps as ≤ ticks/s.
+
+Per-output cost is linear: ~3.65 ms at 720p, ~8.1 ms at 1080p (~8.9 ms once the main thread is
+saturated). About 85 % of it is `layer.render(in:)` (720p render p50 3.1 ms of 3.65 ms); the
+`texture.replace` upload is ~0.55 ms and publish < 0.1 ms.
+
+Syphon client check (2 × 720p tiles, `SyphonMetalClient` per server, 5 s): `Spike 1` 301 frames
+(60.2 fps), `Spike 2` 301 frames (60.2 fps), both `bgra8Unorm` 1280x720, frame counter decoded from
+every received texture. Each server delivers independently. (Run while locked, so the decoded
+counter was constant; freshness was proven by the unlocked runs above.)
+
+### Recommendation
+
+- **Tiles (case 1) with a per-view `_overrideDeviceScaleFactor` = output px / tile pt** (KVC key
+  `overrideDeviceScaleFactor`, guard `_setOverrideDeviceScaleFactor:`), `_viewScale` = tile pt /
+  output px, capture CTM scale = output px / tile pt. Without the override, a 480 pt tile on a 2x
+  screen is rasterized at 960 px and the 720p output is upscaled (sharp 0.50). Pages then see
+  `devicePixelRatio` = 2.67 (720p) / 4 (1080p) at 480 pt tiles.
+- Stacked (case 2) also works and is the fallback if the tile layout has to change; hidden,
+  low-alpha and offscreen-window hosting do not.
+- **Supported at 60 fps with fresh frames:** 1–3 × 720p, 1 × 1080p, 1080p + 720p.
+  1080p + 2 × 720p fits the tick (15.6 ms p95) but leaves no headroom — expect drops like
+  4 × 720p. **Not supported:** 2 × 1080p (54 fps), 4 × 720p (47 fresh fps), 3+ × 1080p.
+- Budget rule for the capture driver: the sum of per-output costs should stay ≤ ~12 ms; beyond
+  that the page's own rAF and WebKit's main-thread commits starve even while ticks stay at 60/s
+  (4 × 720p: 60 ticks/s, 47 fresh fps). Use the deadline/round-robin with a ~12 ms deadline and
+  keep the cap at 4, surfacing per-output fps so an overloaded mix is visible.
+- More headroom needs a different capture path, not upload tweaks: IOSurface-backed zero-copy
+  saves at most ~0.55 ms per 720p output. GPU capture (ScreenCaptureKit) or rendering off the main
+  thread is the follow-up if 2 × 1080p is required.
+
+### Surprises
+
+1. **A fully covered window freezes output — already true of today's single-output app.** WebKit
+   throttles per window occlusion, so the tile approach (like the current app) needs the
+   SyphonWeb window at least partly visible. Partial cover, a fully hidden tile and an inactive
+   app are all fine. Screen lock / display sleep freezes everything. Show machines should disable
+   display sleep and screen lock.
+2. **An alpha-0 borderless window keeps painting when everything else is covered** (window server
+   still reports it `.visible`), including at `.screenSaver` level under a full-screen cover with
+   the app inactive. That enables a cover-proof design: host all web views stacked in an alpha-0,
+   mouse-transparent, all-Spaces window and show tiles from the captured frames. Cost: a
+   `CGImage` tile update at 60 Hz adds ~1 ms per 720p output (copy-on-write of the context) —
+   2 × 720p 8.8 ms p50 vs 7.3 ms; at 15 Hz tile refresh it's ~free. Untested: full-screen apps on
+   other Spaces, Mission Control, multiple displays. Decide whether "survives full cover" is a
+   requirement before Phase 2.
+3. **Viewport units are 0 after `_layoutMode`/`_viewScale` unless the view is resized
+   afterwards.** With a fixed frame, `vw`/`vh` resolved to 0 and the initial containing block
+   stayed at the view's point width, while `innerWidth` was already correct. Resizing the frame by
+   1 pt and back fixes it. The product probably avoids this through `resizeWindow` in
+   `updateNSView` (not verified); tiles with fixed frames must nudge the size after setting the
+   scale.
+4. Main-thread saturation throttles the page too: at 2 × 1080p the page's own rAF drops to 54,
+   matching the tick rate.
+5. `alphaValue = 0.01` views are captured with that alpha applied and cost 3x (10.9 ms at 720p).
+6. `NSView.displayLink` (macOS 14) and a `.common` `Timer` performed the same; the display link
+   had slightly steadier per-second rAF (min 60 vs 59). Either is fine.
