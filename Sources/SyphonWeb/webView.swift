@@ -119,11 +119,12 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   static func normalizedURL(_ string: String) -> URL? {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    // Only strings with "://" or a known scheme-only form keep their scheme. "localhost:3000"
+    // Only strings starting with "<scheme>://" or a known scheme-only form keep their scheme. "localhost:3000"
     // would otherwise parse with scheme "localhost", and "127.0.0.1:3000" not at all.
     let lower = trimmed.lowercased()
+    // Anchored at the start: "example.com/?next=https://x" has no scheme of its own
     let keepsScheme =
-      trimmed.contains("://")
+      trimmed.range(of: "^[A-Za-z][A-Za-z0-9+.-]*://", options: .regularExpression) != nil
       || ["about:", "data:", "javascript:", "blob:"].contains { lower.hasPrefix($0) }
     if keepsScheme { return URL(string: trimmed) }
     // Local dev servers rarely have TLS: localhost and IPv4 literals get http, the rest https.
