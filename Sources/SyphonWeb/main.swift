@@ -1,5 +1,6 @@
 import AppKit
 import MetalKit
+import SwiftOSC
 import SwiftUI
 import Syphon
 
@@ -31,6 +32,7 @@ class WindowDelegate: NSObject, NSWindowDelegate {
 class AppDelegate: NSObject, NSApplicationDelegate {
   let mainWindow: NSWindow = NSWindow()
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
+  var oscServer: OSCUDPServer?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
@@ -59,6 +61,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.makeKeyAndOrderFront(mainWindow)
 
     setupAppMenu()
+
+    oscServer = startOSCServer(state: state)
 
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)

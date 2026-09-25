@@ -3,10 +3,26 @@ import SwiftUI
 import Syphon
 import WebKit
 
-class WebViewState: ObservableObject {
+// @unchecked: mutated only from the main actor (SwiftUI @Published + navigate(to:) both require it)
+class WebViewState: ObservableObject, @unchecked Sendable {
   @Published var url: URL = URL(string: "https://puppy.surf")!
   @Published var loading: Bool = false
   @Published var currentUrl: URL?
+
+  // Normalizes a string (prepends https:// when no scheme) and navigates the web view to it
+  @MainActor
+  func navigate(to urlString: String) {
+    let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    if var urlToNavigate = URL(string: trimmed) {
+      if urlToNavigate.scheme == nil {
+        if let httpsURL = URL(string: "https://" + trimmed) {
+          urlToNavigate = httpsURL
+        }
+      }
+
+      url = urlToNavigate
+    }
+  }
 
   // Metal Related Objects
   var texture: MTLTexture?
@@ -113,8 +129,23 @@ struct WebView: NSViewRepresentable {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-      parent.state.loading = false
+      parent.state.loading = webView.isLoading
       NSLog("Done loading URL: \(parent.state.url)")
+    }
+
+    func webView(
+      _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error
+    ) {
+      parent.state.loading = webView.isLoading
+      NSLog("Failed loading URL: \(parent.state.url) error: \(error)")
+    }
+
+    func webView(
+      _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+      withError error: Error
+    ) {
+      parent.state.loading = webView.isLoading
+      NSLog("Failed provisional loading URL: \(parent.state.url) error: \(error)")
     }
   }
 }

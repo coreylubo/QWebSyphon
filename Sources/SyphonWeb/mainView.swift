@@ -66,18 +66,6 @@ struct MainView: View {
     }
   }
 
-  func navigateTo(urlString: String) {
-    if var urlToNavigate = URL(string: urlString) {
-      if urlToNavigate.scheme == nil {
-        if let httpsURL = URL(string: "https://" + urlString) {
-          urlToNavigate = httpsURL
-        }
-      }
-
-      state.url = urlToNavigate
-    }
-  }
-
   func refreshBookmarks() {
     bookmarks = []
     bookmarks = Bookmark.getAll()
@@ -127,7 +115,7 @@ struct MainView: View {
 
     }.onTapGesture {
       selectedBookmark = bookmark
-      navigateTo(urlString: bookmark.url)
+      state.navigate(to: bookmark.url)
     }
     .tag(bookmark)
     .contextMenu {

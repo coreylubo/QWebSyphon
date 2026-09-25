@@ -4,6 +4,14 @@ This is a really basic macOS app (macOS 12.0+ and Swift 6.1.0+) that renders a w
 
 It's currently hard coded in `main.swift` to render to Syphon using the Metal API at 1280x720 and generally can send frames at at least 30 fps depending on the complexity of the webpage. 
 
+# OSC Control
+
+SyphonWeb listens for OSC messages on UDP port 9000:
+
+- `/url <string>` — load a URL (`https://` is added if no scheme is given)
+- `/bookmark <string>` — load the bookmark with that name (case-insensitive)
+- `/bookmark <int>` — load the bookmark at that 1-based position in the sidebar (favorites first). Whole-number floats are accepted, for senders like TouchOSC.
+
 # Developing
 
 Everything you need should be in this repo, including the pre-built Syphon framework that I converted into a `.xcframework` so you don't need to use Xcode. Along with a few hacks to make using VSCode easier with Syphon's framework.

@@ -116,7 +116,9 @@ class Bookmark: Identifiable, Hashable {
 
   public static func getAll() -> [Bookmark] {
     do {
-      let bookmarks = SQLite.Table("bookmarks")
+      let id = SQLite.Expression<Int64>("id")
+      let order = SQLite.Expression<Int64>("order")
+      let bookmarks = SQLite.Table("bookmarks").order(order.asc, id.asc)
       let itr: RowIterator? = try databaseConn?.prepareRowIterator(bookmarks)
       let bookmarksFound = try itr?.map { row in
         Bookmark.init(fromRowElement: row)
