@@ -115,14 +115,25 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // The live web view, set in WebView.makeNSView
   weak var webView: WKWebView?
 
-  // Trims and prepends https:// when no scheme. Shared so bookmark URLs compare equal to `url`.
+  // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to `url`.
   static func normalizedURL(_ string: String) -> URL? {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let parsed = URL(string: trimmed) else { return nil }
-    if parsed.scheme == nil, let httpsURL = URL(string: "https://" + trimmed) {
-      return httpsURL
-    }
-    return parsed
+    guard !trimmed.isEmpty else { return nil }
+    // Only strings with "://" or a known scheme-only form keep their scheme. "localhost:3000"
+    // would otherwise parse with scheme "localhost", and "127.0.0.1:3000" not at all.
+    let lower = trimmed.lowercased()
+    let keepsScheme =
+      trimmed.contains("://")
+      || ["about:", "data:", "javascript:", "blob:"].contains { lower.hasPrefix($0) }
+    if keepsScheme { return URL(string: trimmed) }
+    // Local dev servers rarely have TLS: localhost and IPv4 literals get http, the rest https.
+    let host = lower.split(separator: "/", maxSplits: 1).first.map(String.init) ?? lower
+    let hostname = host.split(separator: ":").first.map(String.init) ?? host
+    let isLocal =
+      hostname == "localhost" || hostname.hasSuffix(".local")
+      || hostname.split(separator: ".").count == 4
+        && hostname.split(separator: ".").allSatisfy { UInt8($0) != nil }
+    return URL(string: (isLocal ? "http://" : "https://") + trimmed)
   }
 
   // Normalizes a string and navigates the web view to it
