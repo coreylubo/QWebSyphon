@@ -1,7 +1,8 @@
 import Foundation
 import SwiftOSC
 
-let oscPort: UInt16 = 9000
+let defaultOSCPort: UInt16 = 9000
+private let bookmarkAddressPrefix = "/syphon/bookmark/"
 
 // A bookmark's name/url/favorite flag, stripped of the SQLite-backed `Bookmark` class so the
 // dispatch logic below can be tested without a database.
@@ -11,9 +12,10 @@ struct OSCBookmarkEntry {
   let favorite: Bool
 }
 
-// Resolves an OSC `/bookmark` argument to a URL. `name` matches case-insensitively (trimmed).
-// `position` is a 1-based index into sidebar display order: favorites first, then non-favorites,
-// each preserving `bookmarks` order (matches MainView's two sections). Returns nil on no match.
+// Resolves an OSC `/syphon/bookmark` argument to a URL. `name` matches case-insensitively
+// (trimmed). `position` is a 1-based index into sidebar display order: favorites first, then
+// non-favorites, each preserving `bookmarks` order (matches MainView's two sections). Returns nil
+// on no match.
 func resolveBookmarkURL(name: String?, position: Int?, in bookmarks: [OSCBookmarkEntry]) -> String? {
   if let name {
     let target = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -48,70 +50,134 @@ func integralOSCValue(_ value: any OSCValue) -> Int? {
   }
 }
 
+// `/syphon/bookmark <name-or-position>`: a string label/name matches `Bookmark.find(label:)`
+// first, then falls back to a case-insensitive name match; an int/float selects by 1-based
+// sidebar position.
 @available(macOS 14, *)
 @MainActor
 func handleBookmarkMessage(name: String?, position: Int?, state: WebViewState) {
+  if let name, let byLabel = Bookmark.find(label: name) {
+    state.navigate(to: byLabel.url)
+    return
+  }
+
   let entries = Bookmark.getAll().map {
     OSCBookmarkEntry(name: $0.name, url: $0.url, favorite: $0.favorite)
   }
 
   guard let url = resolveBookmarkURL(name: name, position: position, in: entries) else {
-    NSLog("OSC: /bookmark no match for \(name ?? position.map(String.init) ?? "<none>")")
+    NSLog("OSC: /syphon/bookmark no match for \(name ?? position.map(String.init) ?? "<none>")")
     return
   }
 
   state.navigate(to: url)
 }
 
-// Starts a UDP OSC server on `oscPort` and dispatches `/url` and `/bookmark` messages to `state`.
-// Bind failures are logged, not fatal, so the app keeps running without OSC control.
+// `/syphon/bookmark/<label>`: looks up the bookmark by its exact OSC label.
 @available(macOS 14, *)
-func startOSCServer(state: WebViewState) -> OSCUDPServer {
-  let server = OSCUDPServer(
-    port: oscPort,
-    receiveHandler: .messages { message, _, _, _ in
-      let address = message.addressPattern.stringValue
-      let values = message.values
+@MainActor
+func handleBookmarkLabelMessage(label: String, state: WebViewState) {
+  guard let bookmark = Bookmark.find(label: label) else {
+    NSLog("OSC: \(bookmarkAddressPrefix)\(label) no match")
+    return
+  }
+  state.navigate(to: bookmark.url)
+}
 
-      switch address {
-      case "/url":
-        guard let urlString = values.first as? String else {
-          NSLog("OSC: /url requires a string argument, ignoring")
-          return
-        }
-        Task { @MainActor in
-          state.navigate(to: urlString)
-        }
+// Parses one incoming OSC message and hops to the main actor for anything that touches `state`.
+// Runs on the OSC server's receive queue (not the main actor), so values are extracted here as
+// plain Sendable data before crossing over.
+@available(macOS 14, *)
+func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState) {
+  let address = message.addressPattern.stringValue
+  let values = message.values
 
-      case "/bookmark":
-        guard let first = values.first else {
-          NSLog("OSC: /bookmark requires an argument, ignoring")
-          return
-        }
-        if let name = first as? String {
-          Task { @MainActor in
-            handleBookmarkMessage(name: name, position: nil, state: state)
-          }
-        } else if let position = integralOSCValue(first) {
-          Task { @MainActor in
-            handleBookmarkMessage(name: nil, position: position, state: state)
-          }
-        } else {
-          NSLog("OSC: /bookmark argument must be a string or an integral number, ignoring")
-        }
+  switch address {
+  case "/syphon/url":
+    guard let urlString = values.first as? String else {
+      NSLog("OSC: /syphon/url requires a string argument, ignoring")
+      return
+    }
+    Task { @MainActor in
+      state.navigate(to: urlString)
+    }
 
-      default:
-        NSLog("OSC: ignoring unhandled address \(address)")
+  case "/syphon/bookmark":
+    guard let first = values.first else {
+      NSLog("OSC: /syphon/bookmark requires an argument, ignoring")
+      return
+    }
+    if let name = first as? String {
+      Task { @MainActor in
+        handleBookmarkMessage(name: name, position: nil, state: state)
       }
+    } else if let position = integralOSCValue(first) {
+      Task { @MainActor in
+        handleBookmarkMessage(name: nil, position: position, state: state)
+      }
+    } else {
+      NSLog("OSC: /syphon/bookmark argument must be a string or an integral number, ignoring")
+    }
+
+  case "/syphon/refresh":
+    Task { @MainActor in
+      state.reload()
+    }
+
+  default:
+    if address.hasPrefix(bookmarkAddressPrefix) {
+      let label = String(address.dropFirst(bookmarkAddressPrefix.count))
+      Task { @MainActor in
+        handleBookmarkLabelMessage(label: label, state: state)
+      }
+    } else {
+      NSLog("OSC: ignoring unhandled address \(address)")
+    }
+  }
+}
+
+// Creates and starts a server in one step so bind failures propagate to the caller instead of
+// being swallowed.
+@available(macOS 14, *)
+private func makeStartedOSCServer(port: UInt16, state: WebViewState) throws -> OSCUDPServer {
+  let server = OSCUDPServer(
+    port: port,
+    receiveHandler: .messages { message, _, _, _ in
+      dispatchOSCMessage(message, state: state)
     }
   )
+  try server.start()
+  return server
+}
 
-  do {
-    try server.start()
-    NSLog("OSC server listening on UDP port \(oscPort)")
-  } catch {
-    NSLog("OSC server failed to start on UDP port \(oscPort): \(error)")
+// Owns the live OSC server and swaps it out when the listen port changes. Bind failures are
+// reflected in `status`, not fatal, so the app keeps running without (or with the old) OSC control.
+@available(macOS 14, *)
+@MainActor
+final class OSCController: ObservableObject {
+  @Published private(set) var status: String = "Not started"
+  private(set) var port: UInt16?
+
+  private let state: WebViewState
+  private var server: OSCUDPServer?
+
+  init(state: WebViewState) {
+    self.state = state
   }
 
-  return server
+  func start(port: UInt16) {
+    // Rebinding the port we already hold would fail with "address in use"
+    if server != nil && self.port == port { return }
+    do {
+      let newServer = try makeStartedOSCServer(port: port, state: state)
+      server?.stop()
+      server = newServer
+      self.port = port
+      status = "Listening on UDP \(port)"
+      NSLog("OSC server listening on UDP port \(port)")
+    } catch {
+      status = "Failed to bind UDP \(port): \(error)"
+      NSLog("OSC server failed to start on UDP port \(port): \(error)")
+    }
+  }
 }

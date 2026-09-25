@@ -4,13 +4,23 @@ This is a really basic macOS app (macOS 12.0+ and Swift 6.1.0+) that renders a w
 
 It renders to Syphon using the Metal API at 1280x720 or 1920x1080 (toggle with the Output picker in the sidebar), at up to 60 fps depending on the complexity of the webpage.
 
+# Settings
+
+Open Settings with `Cmd-,`. From there you can change the output resolution, the OSC listen port
+(1024–65535), and toggle a transparent background (the page itself must set a transparent
+background, e.g. `body { background: transparent }`; output alpha is premultiplied). Settings also
+shows the OSC server's live status and lists every OSC address, including one per bookmark that
+has an OSC label. `Cmd-R` reloads the current page.
+
 # OSC Control
 
-SyphonWeb listens for OSC messages on UDP port 9000:
+SyphonWeb listens for OSC messages on UDP port 9000 by default (configurable in Settings):
 
-- `/url <string>` — load a URL (`https://` is added if no scheme is given)
-- `/bookmark <string>` — load the bookmark with that name (case-insensitive)
-- `/bookmark <int>` — load the bookmark at that 1-based position in the sidebar (favorites first). Whole-number floats are accepted, for senders like TouchOSC.
+- `/syphon/url <string>` — load a URL (`https://` is added if no scheme is given)
+- `/syphon/bookmark <string>` — load the bookmark with that OSC label, else that name (case-insensitive)
+- `/syphon/bookmark <int>` — load the bookmark at that 1-based position in the sidebar (favorites first). Whole-number floats are accepted, for senders like TouchOSC.
+- `/syphon/bookmark/<label>` — load the bookmark with that exact OSC label
+- `/syphon/refresh` — reload the current page
 
 # Developing
 

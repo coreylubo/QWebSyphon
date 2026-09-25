@@ -9,6 +9,10 @@ var activity: NSObjectProtocol?
 activity = ProcessInfo().beginActivity(
   options: ProcessInfo.ActivityOptions.userInitiated, reason: "No Napping!")
 
+#if DEBUG
+  checkBookmarkLabelValidation()
+#endif
+
 // Init metal, syphon and SQLite
 NSLog("Creating Metal device and Syphon server...")
 let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
@@ -30,13 +34,19 @@ class WindowDelegate: NSObject, NSWindowDelegate {
 class AppDelegate: NSObject, NSApplicationDelegate {
   let mainWindow: NSWindow = NSWindow()
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
-  var oscServer: OSCUDPServer?
+
+  // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
+  var state: WebViewState!
+  var oscController: OSCController!
+  var settingsWindow: NSWindow?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
     // Create state object (default resolution, guessed backing scale until the window is shown)
     let state: WebViewState = WebViewState()
     state.frameServer = server
+    self.state = state
+    self.oscController = OSCController(state: state)
 
     // Main Window, sized from the guessed backing scale; corrected below once on screen
     let initialPreview = state.previewSize
@@ -69,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     setupAppMenu()
 
-    oscServer = startOSCServer(state: state)
+    oscController.start(port: state.oscPort)
 
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
@@ -77,6 +87,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func setupAppMenu() {
     let mainMenu = NSMenu()
+
     let appMenuItem = NSMenuItem()
     let appMenu = NSMenu()
 
@@ -84,6 +95,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       NSMenuItem(
         title: "About SyphonWeb", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
         keyEquivalent: ""))
+    appMenu.addItem(NSMenuItem.separator())
+
+    let settingsItem = NSMenuItem(
+      title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+    settingsItem.target = self
+    appMenu.addItem(settingsItem)
     appMenu.addItem(NSMenuItem.separator())
 
     appMenu.addItem(
@@ -94,7 +111,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     appMenuItem.submenu = appMenu
     mainMenu.addItem(appMenuItem)
 
+    let editMenuItem = NSMenuItem()
+    let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(
+      NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+    editMenu.addItem(
+      NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+    editMenu.addItem(
+      NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+    editMenu.addItem(
+      NSMenuItem(
+        title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+    editMenuItem.submenu = editMenu
+    mainMenu.addItem(editMenuItem)
+
+    let viewMenuItem = NSMenuItem()
+    let viewMenu = NSMenu(title: "View")
+    let reloadItem = NSMenuItem(
+      title: "Reload Page", action: #selector(reloadPage), keyEquivalent: "r")
+    reloadItem.target = self
+    viewMenu.addItem(reloadItem)
+    viewMenuItem.submenu = viewMenu
+    mainMenu.addItem(viewMenuItem)
+
     NSApp.mainMenu = mainMenu
+  }
+
+  @objc private func reloadPage() {
+    state.reload()
+  }
+
+  @objc private func showSettings() {
+    if let settingsWindow {
+      settingsWindow.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    let settingsViewInst = SettingsView(state: state, oscController: oscController)
+    let hostingView = NSHostingView(rootView: settingsViewInst)
+
+    let window = NSWindow(
+      contentRect: CGRect(x: 0, y: 0, width: 460, height: 520),
+      styleMask: [.closable, .titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.contentView = hostingView
+    window.isReleasedWhenClosed = false
+    window.center()
+    settingsWindow = window
+
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
   }
 }
 

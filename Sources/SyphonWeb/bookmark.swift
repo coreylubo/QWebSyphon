@@ -10,13 +10,17 @@ class Bookmark: Identifiable, Hashable {
   public var name: String
   public var order: Int64
   public var favorite: Bool
+  public var label: String?
 
-  internal init(id: Int64, url: String, name: String, order: Int64, favorite: Bool) {
+  internal init(
+    id: Int64, url: String, name: String, order: Int64, favorite: Bool, label: String? = nil
+  ) {
     self.id = id
     self.url = url
     self.name = name
     self.order = order
     self.favorite = favorite
+    self.label = label
   }
 
   internal init(fromRowElement: RowIterator.Element) {
@@ -40,6 +44,9 @@ class Bookmark: Identifiable, Hashable {
       self.order = -1
       self.favorite = false
     }
+
+    // Read separately: the column is absent if the label migration couldn't run
+    self.label = (try? fromRowElement.get(SQLite.Expression<String?>("label"))) ?? nil
   }
 
   // Hashable
@@ -49,6 +56,7 @@ class Bookmark: Identifiable, Hashable {
     hasher.combine(self.name)
     hasher.combine(self.order)
     hasher.combine(self.favorite)
+    hasher.combine(self.label)
   }
 
   // Equality and sorting
@@ -80,36 +88,32 @@ class Bookmark: Identifiable, Hashable {
     }
   }
 
-  public func updateName(newName: String) {
+  // Writes name/url/label to the DB, then mirrors them in memory. Returns an error message on
+  // failure (nothing is changed in memory).
+  public func update(name newName: String, url newUrl: String, label newLabel: String?) -> String? {
+    if let error = Bookmark.labelUnavailableError(newLabel) { return error }
+
     let bookmarks = Table("bookmarks")
     let id = SQLite.Expression<Int64>("id")
     let name = SQLite.Expression<String>("name")
+    let url = SQLite.Expression<String>("url")
+    let label = SQLite.Expression<String?>("label")
     let mrk = bookmarks.filter(id == self.id)
+
+    var setters = [name <- newName, url <- newUrl]
+    if bookmarkLabelsEnabled { setters.append(label <- newLabel) }
+
+    do {
+      try databaseConn!.run(mrk.update(setters))
+    } catch {
+      NSLog("Error updating bookmark: \(error)")
+      return Bookmark.describe(error)
+    }
 
     self.name = newName
-    let query = mrk.update(name <- self.name)
-    do {
-      try databaseConn!.run(query)
-      self.name = newName
-    } catch {
-      NSLog("Error updating bookmark name: \(error)")
-    }
-  }
-
-  public func updateUrl(newUrl: String) {
-    let bookmarks = Table("bookmarks")
-    let id = SQLite.Expression<Int64>("id")
-    let url = SQLite.Expression<String>("url")
-    let mrk = bookmarks.filter(id == self.id)
-
     self.url = newUrl
-    let query = mrk.update(url <- self.url)
-    do {
-      try databaseConn!.run(query)
-      self.url = newUrl
-    } catch {
-      NSLog("Error updating bookmark URL: \(error)")
-    }
+    self.label = newLabel
+    return nil
   }
 
   // Static utility functions
@@ -153,20 +157,42 @@ class Bookmark: Identifiable, Hashable {
     }
   }
 
-  public static func addNewBookmark(newBookmark: Bookmark) {
+  // Case-insensitive lookup by OSC label
+  public static func find(label target: String) -> Bookmark? {
+    getAll().first { $0.label?.caseInsensitiveCompare(target) == .orderedSame }
+  }
+
+  // Returns an error message on failure
+  public static func addNewBookmark(name newName: String, url newUrl: String, label newLabel: String?)
+    -> String?
+  {
+    if let error = labelUnavailableError(newLabel) { return error }
+
     let bookmarks = SQLite.Table("bookmarks")
     let order = SQLite.Expression<Int64>("order")
     let name = SQLite.Expression<String>("name")
     let url = SQLite.Expression<String>("url")
     let favorite = SQLite.Expression<Bool>("favorite")
-    let query = bookmarks.insert(
-      order <- 0, name <- newBookmark.name, url <- newBookmark.url, favorite <- false)
+    let label = SQLite.Expression<String?>("label")
+
+    var setters = [order <- 0, name <- newName, url <- newUrl, favorite <- false]
+    if bookmarkLabelsEnabled { setters.append(label <- newLabel) }
 
     do {
-      try databaseConn!.run(query)
+      try databaseConn!.run(bookmarks.insert(setters))
+      return nil
     } catch {
       NSLog("Error creating bookmark: \(error)")
+      return describe(error)
     }
+  }
+
+  private static func labelUnavailableError(_ label: String?) -> String? {
+    label != nil && !bookmarkLabelsEnabled ? "Labels unavailable (database migration failed)" : nil
+  }
+
+  private static func describe(_ error: Error) -> String {
+    "\(error)".contains("UNIQUE constraint failed") ? "Label already used" : "Database error: \(error)"
   }
 
   public static func deleteBookmark(toDelete: Bookmark) {
@@ -181,3 +207,66 @@ class Bookmark: Identifiable, Hashable {
     }
   }
 }
+
+// Validates a raw OSC label. Empty (after trimming) means no label. Labels are [A-Za-z0-9_-],
+// not all digits (numbers select by sidebar position), and unique case-insensitively.
+func validateBookmarkLabel(
+  _ raw: String, existing: [(id: Int64, label: String?)], excludingId: Int64?
+) -> (label: String?, error: String?) {
+  let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+  if label.isEmpty { return (nil, nil) }
+
+  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+  if !label.allSatisfy(allowed.contains) {
+    return (nil, "Labels may only contain letters, numbers, - and _")
+  }
+  if label.allSatisfy(\.isNumber) {
+    return (nil, "Labels can't be numbers (numbers select by sidebar position)")
+  }
+  let taken = existing.contains {
+    $0.id != excludingId && $0.label?.caseInsensitiveCompare(label) == .orderedSame
+  }
+  if taken { return (nil, "Label already used") }
+
+  return (label, nil)
+}
+
+// Validates the whole editor form: name and URL required, then the label.
+func validateBookmarkFields(
+  name: String, url: String, label: String, existing: [(id: Int64, label: String?)],
+  excludingId: Int64?
+) -> (label: String?, error: String?) {
+  if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (nil, "Name is required") }
+  if url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (nil, "URL is required") }
+  return validateBookmarkLabel(label, existing: existing, excludingId: excludingId)
+}
+
+#if DEBUG
+  // Runs at launch in debug builds; traps if label validation regresses.
+  func checkBookmarkLabelValidation() {
+    let existing: [(id: Int64, label: String?)] = [(1, "chuds"), (2, nil)]
+    func check(_ raw: String, _ id: Int64?, _ label: String?, _ fails: Bool) {
+      let result = validateBookmarkLabel(raw, existing: existing, excludingId: id)
+      precondition(
+        result.label == label && (result.error != nil) == fails,
+        "label check failed for \"\(raw)\": \(result)")
+    }
+    check("", nil, nil, false)
+    check("  chuds ", 1, "chuds", false)
+    check("chuds", 1, "chuds", false)
+    check("chuds", nil, nil, true)
+    check("Chuds", 2, nil, true)
+    check("123", nil, nil, true)
+    check("a b", nil, nil, true)
+    check("a/b", nil, nil, true)
+    check("x-1_y", nil, "x-1_y", false)
+    check("é", nil, nil, true)
+    precondition(
+      validateBookmarkFields(name: " ", url: "x", label: "", existing: [], excludingId: nil).error
+        != nil)
+    precondition(
+      validateBookmarkFields(name: "n", url: "", label: "", existing: [], excludingId: nil).error
+        != nil)
+    NSLog("Bookmark label validation self-check passed")
+  }
+#endif

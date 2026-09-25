@@ -25,6 +25,11 @@ enum OutputResolution: String, CaseIterable {
 }
 
 private let outputResolutionDefaultsKey = "outputResolution"
+private let oscPortDefaultsKey = "oscPort"
+private let transparentBackgroundDefaultsKey = "transparentBackground"
+
+// Valid OSC listen ports (avoids the well-known/privileged range below 1024).
+let validOSCPortRange: ClosedRange<Int> = 1024...65535
 
 // @unchecked: mutated only from the main actor (SwiftUI @Published + navigate(to:) both require it)
 class WebViewState: ObservableObject, @unchecked Sendable {
@@ -49,6 +54,26 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // pre-display value is unreliable) and kept current via didChangeBackingPropertiesNotification.
   @Published var backingScale: CGFloat = 2.0
 
+  // OSC listen port, persisted across launches. Changing this does not itself restart the OSC
+  // server; the Settings view calls OSCController.start(port:) and status reflects the result.
+  @Published var oscPort: UInt16 = {
+    let saved = UserDefaults.standard.integer(forKey: oscPortDefaultsKey)
+    return validOSCPortRange.contains(saved) ? UInt16(saved) : defaultOSCPort
+  }() {
+    didSet { UserDefaults.standard.set(Int(oscPort), forKey: oscPortDefaultsKey) }
+  }
+
+  // When true, the web view and Syphon output are transparent instead of opaque white. Requires
+  // the page itself to set a transparent background (e.g. `body { background: transparent }`);
+  // output alpha is premultiplied.
+  @Published var transparentBackground: Bool = UserDefaults.standard.bool(
+    forKey: transparentBackgroundDefaultsKey
+  ) {
+    didSet {
+      UserDefaults.standard.set(transparentBackground, forKey: transparentBackgroundDefaultsKey)
+    }
+  }
+
   // Preview size in points: output pixels / backing scale, so the web view's CSS layout width
   // equals the output pixel width once `pageZoom` is applied.
   var previewSize: CGSize {
@@ -56,19 +81,31 @@ class WebViewState: ObservableObject, @unchecked Sendable {
     return CGSize(width: pixels.width / backingScale, height: pixels.height / backingScale)
   }
 
-  // Normalizes a string (prepends https:// when no scheme) and navigates the web view to it
+  // The live web view, set in WebView.makeNSView
+  weak var webView: WKWebView?
+
+  // Trims and prepends https:// when no scheme. Shared so bookmark URLs compare equal to `url`.
+  static func normalizedURL(_ string: String) -> URL? {
+    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let parsed = URL(string: trimmed) else { return nil }
+    if parsed.scheme == nil, let httpsURL = URL(string: "https://" + trimmed) {
+      return httpsURL
+    }
+    return parsed
+  }
+
+  // Normalizes a string and navigates the web view to it
   @MainActor
   func navigate(to urlString: String) {
-    let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-    if var urlToNavigate = URL(string: trimmed) {
-      if urlToNavigate.scheme == nil {
-        if let httpsURL = URL(string: "https://" + trimmed) {
-          urlToNavigate = httpsURL
-        }
-      }
-
+    if let urlToNavigate = WebViewState.normalizedURL(urlString) {
       url = urlToNavigate
     }
+  }
+
+  @MainActor
+  func reload() {
+    NSLog("Reloading page")
+    webView?.reload()
   }
 
   // Metal Related Objects
@@ -121,6 +158,7 @@ struct WebView: NSViewRepresentable {
 
   func makeNSView(context: Context) -> WKWebView {
     webView.navigationDelegate = context.coordinator
+    state.webView = webView
     webView.load(URLRequest(url: state.url))
 
     Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
@@ -145,7 +183,7 @@ struct WebView: NSViewRepresentable {
 
       webView.getFrame(
         context: state.graphicsContext!, texture: state.texture!, region: state.region!,
-        scale: state.backingScale)
+        scale: state.backingScale, transparent: state.transparentBackground)
       state.frameServer?.publishFrameTexture(
         state.texture!, on: commandBuffer!,
         imageRegion: NSRect(x: 0, y: 0, width: state.texture!.width, height: state.texture!.height),
@@ -161,11 +199,21 @@ struct WebView: NSViewRepresentable {
       state.currentUrl = state.url
     }
 
+    // Apply background transparency to the live view (never `self.webView`, which may not be the
+    // instance actually on screen). `drawsBackground` is undocumented KVC on WKWebView; guarded so
+    // an unrecognized key never crashes.
+    let coordinator = context.coordinator
+    if state.transparentBackground != coordinator.lastTransparentBackground {
+      if nsView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
+        nsView.setValue(!state.transparentBackground, forKey: "drawsBackground")
+      }
+      coordinator.lastTransparentBackground = state.transparentBackground
+    }
+
     // Re-provision the texture/context/region and re-zoom the page whenever the output
     // resolution or the screen's backing scale changes. Runs synchronously (no awaits), on the
     // main actor, so a capture tick never observes a mismatched texture/context.
     let pixelSize = state.resolution.pixelSize
-    let coordinator = context.coordinator
     guard pixelSize != coordinator.lastPixelSize || state.backingScale != coordinator.lastBackingScale
     else {
       return
@@ -201,6 +249,7 @@ struct WebView: NSViewRepresentable {
     var parent: WebView
     var lastPixelSize: CGSize?
     var lastBackingScale: CGFloat?
+    var lastTransparentBackground: Bool = false
 
     init(_ parent: WebView) {
       self.parent = parent
