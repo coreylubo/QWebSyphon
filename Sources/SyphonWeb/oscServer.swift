@@ -186,11 +186,14 @@ final class OSCController: ObservableObject {
   // `oscPortFallbackRange` above it and uses the first that binds, without persisting the
   // fallback. A port the user explicitly saved keeps the old behavior: fail with an error status,
   // no fallback.
-  func start(port: UInt16) {
+  // `explicit` (a port the user just chose in Settings) disables the fallback. Returns whether
+  // `port` itself is now bound.
+  @discardableResult
+  func start(port: UInt16, explicit: Bool = false) -> Bool {
     // Rebinding the port we already hold would fail with "address in use"
-    if server != nil && self.port == port { return }
+    if server != nil && self.port == port { return true }
 
-    let explicitlySaved = appDefaults.object(forKey: oscPortDefaultsKey) != nil
+    let explicitlySaved = explicit || appDefaults.object(forKey: oscPortDefaultsKey) != nil
     var candidates = [port]
     if !explicitlySaved {
       candidates += oscPortFallbackRange.compactMap { offset -> UInt16? in
@@ -211,12 +214,13 @@ final class OSCController: ObservableObject {
           ? "Listening on UDP \(candidate)"
           : "Listening on UDP \(candidate) (port \(port) was in use)"
         NSLog("OSC server listening on UDP port \(candidate)")
-        return
+        return candidate == port
       } catch {
         lastError = error
       }
     }
     status = "Failed to bind UDP \(port): \(lastError!)"
     NSLog("OSC server failed to start on UDP port \(port): \(lastError!)")
+    return false
   }
 }

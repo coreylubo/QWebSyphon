@@ -93,7 +93,7 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
   do {
     if try !hasLabelColumn() {
       NSLog("`bookmarks` has no `label` column, backing up before migrating...")
-      guard backupDatabase(dbPath: dbPath) else {
+      guard backupDatabase(db: db, dbPath: dbPath) else {
         NSLog("Backup failed, skipping `label` migration. Bookmark labels are disabled.")
         return
       }
@@ -122,18 +122,15 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
 // Copies the DB file (and -wal/-shm siblings if present) to
 // `<dbPath>.bak-<timestamp>-<pid>[-wal|-shm]`. The pid keeps concurrent instances' backups from
 // colliding when they race to migrate the same fresh DB.
-func backupDatabase(dbPath: String) -> Bool {
+func backupDatabase(db: Connection, dbPath: String) -> Bool {
   let formatter = DateFormatter()
   formatter.locale = Locale(identifier: "en_US_POSIX")
   formatter.dateFormat = "yyyyMMdd-HHmmss"
   let backupPath = "\(dbPath).bak-\(formatter.string(from: Date()))-\(ProcessInfo.processInfo.processIdentifier)"
-  let fileManager = FileManager.default
 
   do {
-    try fileManager.copyItem(atPath: dbPath, toPath: backupPath)
-    for sibling in ["-wal", "-shm"] where fileManager.fileExists(atPath: dbPath + sibling) {
-      try fileManager.copyItem(atPath: dbPath + sibling, toPath: backupPath + sibling)
-    }
+    // VACUUM INTO writes a consistent snapshot even if another instance is writing
+    try db.run("VACUUM INTO ?", backupPath)
     NSLog("Backed up SQLite DB to \(backupPath)")
     return true
   } catch {

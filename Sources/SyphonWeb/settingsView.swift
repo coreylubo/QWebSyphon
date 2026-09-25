@@ -129,7 +129,10 @@ struct SettingsView: View {
       return
     }
     let port = UInt16(value)
-    state.oscPort = port
-    oscController.start(port: port)
+    // Persist only once the port is actually bound, so a failed Apply doesn't disable the
+    // free-port fallback on the next launch
+    if oscController.start(port: port, explicit: true) {
+      state.oscPort = port
+    }
   }
 }
