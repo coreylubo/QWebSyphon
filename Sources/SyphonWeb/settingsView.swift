@@ -25,6 +25,8 @@ struct SettingsView: View {
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
+  @State private var syphonNameText: String = ""
+  @State private var syphonNameError: String?
 
   var body: some View {
     Form {
@@ -34,6 +36,26 @@ struct SettingsView: View {
             Text(resolution.label).tag(resolution)
           }
         }
+      }
+
+      Section("Syphon") {
+        HStack {
+          TextField("Syphon name", text: $syphonNameText)
+            .onSubmit(applySyphonName)
+          Button("Apply", action: applySyphonName)
+        }
+        if let syphonNameError {
+          Text(syphonNameError).font(.caption).foregroundStyle(.red)
+        }
+      }
+
+      Section("Instances") {
+        Text("Profile: \(profileName ?? "default")")
+        Text(
+          "Run more instances with `open -n SyphonWeb.app --args --profile NAME`. Each profile has its own settings; set a different OSC port per profile. Bookmarks are shared."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
 
       Section("OSC") {
@@ -82,8 +104,20 @@ struct SettingsView: View {
     .frame(minWidth: 420, minHeight: 480)
     .onAppear {
       portText = String(state.oscPort)
+      syphonNameText = state.syphonName
       bookmarks = Bookmark.getAll()
     }
+  }
+
+  private func applySyphonName() {
+    syphonNameError = nil
+    let trimmed = syphonNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      syphonNameError = "Syphon name can't be empty"
+      return
+    }
+    syphonNameText = trimmed
+    state.syphonName = trimmed
   }
 
   private func applyPort() {

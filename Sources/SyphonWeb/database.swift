@@ -64,6 +64,7 @@ func initDatabase() -> Connection? {
     NSLog("Opening SQLite DB at path \(dbPath)")
 
     let db: Connection = try Connection(dbPath)
+    db.busyTimeout = 5
     createBookmarkTable(db: db)
     migrateBookmarkLabels(db: db, dbPath: dbPath)
 
@@ -83,19 +84,29 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
   let bookmarkTable = Table("bookmarks")
   let label = SQLite.Expression<String?>("label")
 
-  do {
-    let hasLabel = try db.prepare("PRAGMA table_info(bookmarks)").contains { row in
+  func hasLabelColumn() throws -> Bool {
+    try db.prepare("PRAGMA table_info(bookmarks)").contains { row in
       row[1] as? String == "label"
     }
+  }
 
-    if !hasLabel {
+  do {
+    if try !hasLabelColumn() {
       NSLog("`bookmarks` has no `label` column, backing up before migrating...")
       guard backupDatabase(dbPath: dbPath) else {
         NSLog("Backup failed, skipping `label` migration. Bookmark labels are disabled.")
         return
       }
-      try db.run(bookmarkTable.addColumn(label))
-      NSLog("Added `label` column to `bookmarks`")
+      // Two instances can both reach here on first launch; the transaction serializes them, and
+      // the column check is repeated inside so the second instance skips the ALTER.
+      try db.transaction(.immediate) {
+        if try !hasLabelColumn() {
+          try db.run(bookmarkTable.addColumn(label))
+          NSLog("Added `label` column to `bookmarks`")
+        } else {
+          NSLog("`label` column already present (added by another instance), skipping ALTER")
+        }
+      }
     }
 
     try db.run(
@@ -108,12 +119,14 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
   }
 }
 
-// Copies the DB file (and -wal/-shm siblings if present) to `<dbPath>.bak-<timestamp>[-wal|-shm]`.
+// Copies the DB file (and -wal/-shm siblings if present) to
+// `<dbPath>.bak-<timestamp>-<pid>[-wal|-shm]`. The pid keeps concurrent instances' backups from
+// colliding when they race to migrate the same fresh DB.
 func backupDatabase(dbPath: String) -> Bool {
   let formatter = DateFormatter()
   formatter.locale = Locale(identifier: "en_US_POSIX")
   formatter.dateFormat = "yyyyMMdd-HHmmss"
-  let backupPath = "\(dbPath).bak-\(formatter.string(from: Date()))"
+  let backupPath = "\(dbPath).bak-\(formatter.string(from: Date()))-\(ProcessInfo.processInfo.processIdentifier)"
   let fileManager = FileManager.default
 
   do {

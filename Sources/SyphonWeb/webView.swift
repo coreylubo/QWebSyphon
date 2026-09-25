@@ -25,8 +25,17 @@ enum OutputResolution: String, CaseIterable {
 }
 
 private let outputResolutionDefaultsKey = "outputResolution"
-private let oscPortDefaultsKey = "oscPort"
+// Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
+// explicitly saved before falling back to the next free port.
+let oscPortDefaultsKey = "oscPort"
 private let transparentBackgroundDefaultsKey = "transparentBackground"
+private let syphonNameDefaultsKey = "syphonName"
+
+// Default Syphon server name: "SyphonWeb", or "SyphonWeb <profile>" when running under a profile.
+func defaultSyphonName() -> String {
+  guard let profileName else { return "SyphonWeb" }
+  return "SyphonWeb \(profileName)"
+}
 
 // Valid OSC listen ports (avoids the well-known/privileged range below 1024).
 let validOSCPortRange: ClosedRange<Int> = 1024...65535
@@ -40,14 +49,33 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // Output resolution, persisted across launches. Preview (web view + window) size is derived
   // from this and `backingScale`, not stored separately.
   @Published var resolution: OutputResolution = {
-    if let saved = UserDefaults.standard.string(forKey: outputResolutionDefaultsKey),
+    if let saved = appDefaults.string(forKey: outputResolutionDefaultsKey),
       let resolution = OutputResolution(rawValue: saved)
     {
       return resolution
     }
     return .hd720
   }() {
-    didSet { UserDefaults.standard.set(resolution.rawValue, forKey: outputResolutionDefaultsKey) }
+    didSet { appDefaults.set(resolution.rawValue, forKey: outputResolutionDefaultsKey) }
+  }
+
+  // Syphon server name, persisted across launches. The initial server is created with this name
+  // directly (AppDelegate). On later change, the server is stopped and replaced rather than
+  // renamed in place: Syphon clients (e.g. QLab) only read the name from a server's initial
+  // announce, so renaming in place leaves stale/duplicate names client-side. Old clients see the
+  // source disappear; a new source with the new name appears.
+  @Published var syphonName: String = {
+    let saved = appDefaults.string(forKey: syphonNameDefaultsKey)?.trimmingCharacters(
+      in: .whitespacesAndNewlines)
+    return saved?.isEmpty == false ? saved! : defaultSyphonName()
+  }() {
+    didSet {
+      appDefaults.set(syphonName, forKey: syphonNameDefaultsKey)
+      // Synchronous, no `await` in between: captureFrame (main actor, 60Hz timer) never
+      // observes frameServer in a stopped-but-not-yet-replaced state.
+      frameServer?.stop()
+      frameServer = SyphonMetalServer(name: syphonName, device: metalDevice)
+    }
   }
 
   // Screen's backing scale factor (1x/2x). Set once the window is actually on screen (the
@@ -57,20 +85,20 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // OSC listen port, persisted across launches. Changing this does not itself restart the OSC
   // server; the Settings view calls OSCController.start(port:) and status reflects the result.
   @Published var oscPort: UInt16 = {
-    let saved = UserDefaults.standard.integer(forKey: oscPortDefaultsKey)
+    let saved = appDefaults.integer(forKey: oscPortDefaultsKey)
     return validOSCPortRange.contains(saved) ? UInt16(saved) : defaultOSCPort
   }() {
-    didSet { UserDefaults.standard.set(Int(oscPort), forKey: oscPortDefaultsKey) }
+    didSet { appDefaults.set(Int(oscPort), forKey: oscPortDefaultsKey) }
   }
 
   // When true, the web view and Syphon output are transparent instead of opaque white. Requires
   // the page itself to set a transparent background (e.g. `body { background: transparent }`);
   // output alpha is premultiplied.
-  @Published var transparentBackground: Bool = UserDefaults.standard.bool(
+  @Published var transparentBackground: Bool = appDefaults.bool(
     forKey: transparentBackgroundDefaultsKey
   ) {
     didSet {
-      UserDefaults.standard.set(transparentBackground, forKey: transparentBackgroundDefaultsKey)
+      appDefaults.set(transparentBackground, forKey: transparentBackgroundDefaultsKey)
     }
   }
 
@@ -120,9 +148,9 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // synchronously (no awaits) so a 60 Hz capture tick never sees a mismatched texture/context.
   @MainActor
   func initMetal(pixelWidth: Int, pixelHeight: Int) {
-    commandQueue = server.device.makeCommandQueue()
+    commandQueue = metalDevice.makeCommandQueue()
     layer = CAMetalLayer()
-    layer?.device = server.device
+    layer?.device = metalDevice
     layer?.pixelFormat = .rgba8Unorm
     layer?.maximumDrawableCount = 2
     layer?.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
@@ -136,7 +164,7 @@ class WebViewState: ObservableObject, @unchecked Sendable {
     textureDescriptor.usage.insert(MTLTextureUsage.shaderRead)
     textureDescriptor.usage.insert(MTLTextureUsage.shaderWrite)
 
-    texture = server.device.makeTexture(descriptor: textureDescriptor)
+    texture = metalDevice.makeTexture(descriptor: textureDescriptor)
     graphicsContext = CGContext(
       data: nil,
       width: texture!.width,

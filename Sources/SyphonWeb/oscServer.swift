@@ -150,13 +150,18 @@ private func makeStartedOSCServer(port: UInt16, state: WebViewState) throws -> O
   return server
 }
 
+// How many ports above the requested one to try when it's not explicitly saved (see `start`).
+private let oscPortFallbackRange = 1...20
+
 // Owns the live OSC server and swaps it out when the listen port changes. Bind failures are
 // reflected in `status`, not fatal, so the app keeps running without (or with the old) OSC control.
 @available(macOS 14, *)
 @MainActor
 final class OSCController: ObservableObject {
   @Published private(set) var status: String = "Not started"
-  private(set) var port: UInt16?
+  // Actual bound port (may differ from the requested one after a fallback). @Published so the
+  // window title can track it.
+  @Published private(set) var port: UInt16?
 
   private let state: WebViewState
   private var server: OSCUDPServer?
@@ -165,19 +170,42 @@ final class OSCController: ObservableObject {
     self.state = state
   }
 
+  // Tries `port` first. If this profile has no explicitly saved `oscPort` default (a fresh
+  // profile defaulting to 9000, say) and `port` fails to bind, tries the next ports up to
+  // `oscPortFallbackRange` above it and uses the first that binds, without persisting the
+  // fallback. A port the user explicitly saved keeps the old behavior: fail with an error status,
+  // no fallback.
   func start(port: UInt16) {
     // Rebinding the port we already hold would fail with "address in use"
     if server != nil && self.port == port { return }
-    do {
-      let newServer = try makeStartedOSCServer(port: port, state: state)
-      server?.stop()
-      server = newServer
-      self.port = port
-      status = "Listening on UDP \(port)"
-      NSLog("OSC server listening on UDP port \(port)")
-    } catch {
-      status = "Failed to bind UDP \(port): \(error)"
-      NSLog("OSC server failed to start on UDP port \(port): \(error)")
+
+    let explicitlySaved = appDefaults.object(forKey: oscPortDefaultsKey) != nil
+    var candidates = [port]
+    if !explicitlySaved {
+      candidates += oscPortFallbackRange.compactMap { offset -> UInt16? in
+        let candidate = Int(port) + offset
+        return candidate <= Int(UInt16.max) ? UInt16(candidate) : nil
+      }
     }
+
+    var lastError: Error?
+    for candidate in candidates {
+      do {
+        let newServer = try makeStartedOSCServer(port: candidate, state: state)
+        server?.stop()
+        server = newServer
+        self.port = candidate
+        status =
+          candidate == port
+          ? "Listening on UDP \(candidate)"
+          : "Listening on UDP \(candidate) (port \(port) was in use)"
+        NSLog("OSC server listening on UDP port \(candidate)")
+        return
+      } catch {
+        lastError = error
+      }
+    }
+    status = "Failed to bind UDP \(port): \(lastError!)"
+    NSLog("OSC server failed to start on UDP port \(port): \(lastError!)")
   }
 }

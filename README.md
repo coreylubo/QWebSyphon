@@ -22,6 +22,21 @@ SyphonWeb listens for OSC messages on UDP port 9000 by default (configurable in 
 - `/syphon/bookmark/<label>` — load the bookmark with that exact OSC label
 - `/syphon/refresh` — reload the current page
 
+# Multiple instances
+
+Run more than one SyphonWeb window (each publishing its own Syphon server) with `--profile NAME`:
+
+```
+open -n SyphonWeb.app --args --profile stage1
+swift run -c release SyphonWeb --profile stage1   # from source
+```
+
+Each profile gets its own settings (window position aside), stored separately — give each one a
+different OSC port in Settings so they don't collide. Bookmarks are stored in one shared database
+and are the same across every profile. The Syphon server name (Settings → Syphon) also defaults to
+`SyphonWeb <profile>` so each instance is identifiable in VDMX/TouchDesigner; change it there if
+you want something else.
+
 # Developing
 
 Everything you need should be in this repo, including the pre-built Syphon framework that I converted into a `.xcframework` so you don't need to use Xcode. Along with a few hacks to make using VSCode easier with Syphon's framework.

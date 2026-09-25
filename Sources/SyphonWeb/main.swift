@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import MetalKit
 import SwiftOSC
 import SwiftUI
@@ -13,10 +14,11 @@ activity = ProcessInfo().beginActivity(
   checkBookmarkLabelValidation()
 #endif
 
-// Init metal, syphon and SQLite
-NSLog("Creating Metal device and Syphon server...")
+// Init metal and SQLite. The Syphon server itself is created per-instance in
+// AppDelegate once the final name is known (see Bug 1: creating it here with a placeholder
+// name and renaming afterwards means QLab's initial Syphon announce carries the wrong name).
+NSLog("Creating Metal device...")
 let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
-let server: SyphonMetalServer = SyphonMetalServer.init(name: "SyphonWeb", device: metalDevice)
 
 NSLog("Opening SQLite database connection...")
 nonisolated(unsafe) let databaseConn = initDatabase()
@@ -39,14 +41,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var state: WebViewState!
   var oscController: OSCController!
   var settingsWindow: NSWindow?
+  private var oscPortCancellable: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
     // Create state object (default resolution, guessed backing scale until the window is shown)
     let state: WebViewState = WebViewState()
-    state.frameServer = server
+    // Created with the final name up front (not renamed afterwards): QLab and other clients only
+    // read the name from the initial Syphon announce, so a later rename leaves them showing stale
+    // or duplicate source names.
+    state.frameServer = SyphonMetalServer(name: state.syphonName, device: metalDevice)
     self.state = state
     self.oscController = OSCController(state: state)
+    // @Published publishes on willSet (i.e. with the incoming value, before the stored property
+    // is actually updated) — use the value the sink receives directly rather than re-reading
+    // `oscController.port` inside the closure, which would still see the old value.
+    oscPortCancellable = oscController.$port.sink { [weak self] port in
+      self?.updateWindowTitle(port: port)
+    }
 
     // Main Window, sized from the guessed backing scale; corrected below once on screen
     let initialPreview = state.previewSize
@@ -55,7 +67,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.setContentSize(mainSize)
     mainWindow.styleMask = [.closable, .titled]
     mainWindow.delegate = mainWindowDelegate
-    mainWindow.title = "SyphonWeb"
 
     let mainViewInst = MainView(state: state)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
@@ -83,6 +94,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    // Stop the Syphon server explicitly so clients drop the source cleanly on quit.
+    state.frameServer?.stop()
+  }
+
+  // "SyphonWeb — left · OSC 9001" (profile + actual bound port), or "SyphonWeb · OSC 9000"
+  // for the default profile. Reflects the OSC controller's actual bound port (which may differ
+  // from the configured/requested port after a fallback), not just the configured one.
+  private func updateWindowTitle(port: UInt16?) {
+    let base = profileName.map { "SyphonWeb — \($0)" } ?? "SyphonWeb"
+    guard let port else {
+      mainWindow.title = base
+      return
+    }
+    mainWindow.title = "\(base) · OSC \(port)"
   }
 
   private func setupAppMenu() {

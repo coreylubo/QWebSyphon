@@ -114,21 +114,7 @@ struct MainView: View {
   }
 
   @ViewBuilder func makeBookmark(bookmark: Bookmark) -> some View {
-    HStack(spacing: 6) {
-      Group {
-        if isLive(bookmark) {
-          Image(systemName: "globe").foregroundStyle(.blue)
-        }
-      }.frame(width: 16)
-      Text(bookmark.name).lineLimit(1)
-      if let label = bookmark.label {
-        Spacer(minLength: 4)
-        Text("/\(label)")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-    }
+    BookmarkRow(bookmark: bookmark, isLive: isLive(bookmark))
     .tag(bookmark.id)
     .popover(
       isPresented: Binding(
@@ -144,6 +130,36 @@ struct MainView: View {
         return nil
       } onCancel: {
         editingId = nil
+      }
+    }
+  }
+}
+
+// One sidebar row. Live bookmarks are bolded with a globe icon; the icon is white instead of blue
+// when the row is selected (background prominence increased), so it stays visible against the
+// selection highlight.
+@available(macOS 14, *)
+private struct BookmarkRow: View {
+  let bookmark: Bookmark
+  let isLive: Bool
+
+  @Environment(\.backgroundProminence) private var prominence
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Group {
+        if isLive {
+          Image(systemName: "globe")
+            .foregroundStyle(prominence == .increased ? Color.white : Color.blue)
+        }
+      }.frame(width: 16)
+      Text(bookmark.name).lineLimit(1).fontWeight(isLive ? .bold : .regular)
+      if let label = bookmark.label {
+        Spacer(minLength: 4)
+        Text("/\(label)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
       }
     }
   }
