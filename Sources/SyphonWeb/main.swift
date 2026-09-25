@@ -11,8 +11,6 @@ activity = ProcessInfo().beginActivity(
 
 // Init metal, syphon and SQLite
 NSLog("Creating Metal device and Syphon server...")
-let viewWidth = 1280.0
-let viewHeight = 720.0
 let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
 let server: SyphonMetalServer = SyphonMetalServer.init(name: "SyphonWeb", device: metalDevice)
 
@@ -36,21 +34,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
-    // Main Window
+    // Create state object (default resolution, guessed backing scale until the window is shown)
+    let state: WebViewState = WebViewState()
+    state.frameServer = server
+
+    // Main Window, sized from the guessed backing scale; corrected below once on screen
+    let initialPreview = state.previewSize
     let mainSize: CGSize = CGSize(
-      width: viewWidth + 200, height: viewHeight)
+      width: initialPreview.width + 200, height: initialPreview.height)
     mainWindow.setContentSize(mainSize)
     mainWindow.styleMask = [.closable, .titled]
     mainWindow.delegate = mainWindowDelegate
     mainWindow.title = "SyphonWeb"
-
-    // Create state object and init Metal objects
-    let state: WebViewState = WebViewState()
-    state.frameServer = server
-    state.initMetal(
-      width: viewWidth / mainWindow.backingScaleFactor,
-      height: viewHeight / mainWindow.backingScaleFactor, scaleFactor: mainWindow.backingScaleFactor
-    )
 
     let mainViewInst = MainView(state: state)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
@@ -59,6 +54,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.contentView!.addSubview(mainView)
     mainWindow.center()
     mainWindow.makeKeyAndOrderFront(mainWindow)
+
+    // The pre-display backing scale is unreliable; read the real value now that the window is on
+    // screen, and keep it current when the window moves between 1x/2x screens.
+    state.backingScale = mainWindow.backingScaleFactor
+    let window = mainWindow
+    NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeBackingPropertiesNotification, object: window, queue: .main
+    ) { _ in
+      Task { @MainActor in
+        state.backingScale = window.backingScaleFactor
+      }
+    }
 
     setupAppMenu()
 

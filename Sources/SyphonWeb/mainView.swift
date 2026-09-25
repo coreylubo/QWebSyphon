@@ -41,7 +41,12 @@ struct MainView: View {
         }
       }.listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-          VStack {
+          VStack(alignment: .leading, spacing: 8) {
+            Picker("Output", selection: $state.resolution) {
+              ForEach(OutputResolution.allCases, id: \.self) { resolution in
+                Text(resolution.label).tag(resolution)
+              }
+            }.pickerStyle(.segmented)
             Button(action: {
               showAddBookmark = true
             }) {
@@ -54,9 +59,8 @@ struct MainView: View {
             }
         }.frame(width: 200, alignment: .top)
       WebView(state: state).frame(
-        minWidth: viewWidth, maxWidth: viewWidth,
-        minHeight: viewHeight, maxHeight: viewHeight,
-      ).scaleEffect(0.90)
+        width: state.previewSize.width, height: state.previewSize.height
+      )
     }
     .confirmationDialog("Really delete this bookmark?", isPresented: $showDeleteConfirm) {
       Button("Yes") {

@@ -2,7 +2,7 @@
 
 This is a really basic macOS app (macOS 12.0+ and Swift 6.1.0+) that renders a web view to [Syphon](https://syphon.info) so you can use it in many live visual suites like VDMX and TouchDesigner.
 
-It's currently hard coded in `main.swift` to render to Syphon using the Metal API at 1280x720 and generally can send frames at at least 30 fps depending on the complexity of the webpage. 
+It renders to Syphon using the Metal API at 1280x720 or 1920x1080 (toggle with the Output picker in the sidebar), at up to 60 fps depending on the complexity of the webpage.
 
 # OSC Control
 
