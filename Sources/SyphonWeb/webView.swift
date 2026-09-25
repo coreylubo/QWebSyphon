@@ -103,7 +103,7 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   }
 
   // Preview size in points: output pixels / backing scale, so the web view's CSS layout width
-  // equals the output pixel width once `pageZoom` is applied.
+  // equals the output pixel width once `setLayoutScale` is applied.
   var previewSize: CGSize {
     let pixels = resolution.pixelSize
     return CGSize(width: pixels.width / backingScale, height: pixels.height / backingScale)
@@ -179,6 +179,29 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   }
 }
 
+extension WKWebView {
+  // Lays the page out at (frame / scale) CSS px and draws it shrunk by `scale`, so a preview sized
+  // output px / backing scale gets a CSS viewport of exactly the output pixel size, rasterized at
+  // 1 device px per CSS px.
+  //
+  // Prefers the private `_viewScale` + `_layoutMode` SPI (what Safari's Responsive Design Mode
+  // uses): `pageZoom` gets box sizes right but WebKit also multiplies viewport-unit *font sizes*
+  // by the zoom, so `font-size: 10vw` renders at half size. Falls back to `pageZoom` if the SPI
+  // is ever removed.
+  func setLayoutScale(_ scale: CGFloat) {
+    guard responds(to: NSSelectorFromString("_setViewScale:")),
+      responds(to: NSSelectorFromString("_setLayoutMode:"))
+    else {
+      pageZoom = scale
+      return
+    }
+    pageZoom = 1
+    // 2 == _WKLayoutModeDynamicSizeComputedFromViewScale: layout size = view size / _viewScale
+    setValue(2, forKey: "layoutMode")
+    setValue(scale, forKey: "viewScale")
+  }
+}
+
 struct WebView: NSViewRepresentable {
   let webView: WKWebView = WKWebView()
 
@@ -248,7 +271,7 @@ struct WebView: NSViewRepresentable {
     }
 
     state.initMetal(pixelWidth: Int(pixelSize.width), pixelHeight: Int(pixelSize.height))
-    nsView.pageZoom = 1 / state.backingScale
+    nsView.setLayoutScale(1 / state.backingScale)
     resizeWindow(nsView: nsView)
     coordinator.lastPixelSize = pixelSize
     coordinator.lastBackingScale = state.backingScale
