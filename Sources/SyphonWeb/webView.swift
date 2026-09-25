@@ -45,6 +45,9 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   @Published var url: URL = URL(string: "https://puppy.surf")!
   @Published var loading: Bool = false
   @Published var currentUrl: URL?
+  // Set on didFail/didFailProvisionalNavigation, cleared on didStartProvisionalNavigation. Shown
+  // in the status bar's page-state indicator.
+  @Published var loadError: String?
 
   // Output resolution, persisted across launches. Preview (web view + window) size is derived
   // from this and `backingScale`, not stored separately.
@@ -206,6 +209,9 @@ struct WebView: NSViewRepresentable {
   let webView: WKWebView = WKWebView()
 
   @ObservedObject var state: WebViewState
+  // Plain reference (not @ObservedObject): WebView only writes frameCount here, it doesn't need
+  // to re-render when OutputStats' published stats change.
+  let stats: OutputStats
 
   func makeNSView(context: Context) -> WKWebView {
     webView.navigationDelegate = context.coordinator
@@ -240,6 +246,7 @@ struct WebView: NSViewRepresentable {
         imageRegion: NSRect(x: 0, y: 0, width: state.texture!.width, height: state.texture!.height),
         flipped: false)
       commandBuffer?.commit()
+      stats.frameCount += 1
     }
   }
 
@@ -282,7 +289,8 @@ struct WebView: NSViewRepresentable {
   func resizeWindow(nsView: WKWebView) {
     guard let window = nsView.window else { return }
     let preview = state.previewSize
-    let newContentSize = CGSize(width: preview.width + 200, height: preview.height)
+    let newContentSize = CGSize(
+      width: preview.width + 200, height: preview.height + statusBarHeight)
     let contentRect = window.contentRect(forFrameRect: window.frame)
 
     var frame = window.frame
@@ -308,6 +316,7 @@ struct WebView: NSViewRepresentable {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
       parent.state.loading = true
+      parent.state.loadError = nil
       NSLog("Loading URL: \(parent.state.url)")
     }
 
@@ -320,6 +329,7 @@ struct WebView: NSViewRepresentable {
       _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error
     ) {
       parent.state.loading = webView.isLoading
+      parent.state.loadError = error.localizedDescription
       NSLog("Failed loading URL: \(parent.state.url) error: \(error)")
     }
 
@@ -328,6 +338,7 @@ struct WebView: NSViewRepresentable {
       withError error: Error
     ) {
       parent.state.loading = webView.isLoading
+      parent.state.loadError = error.localizedDescription
       NSLog("Failed provisional loading URL: \(parent.state.url) error: \(error)")
     }
   }

@@ -88,9 +88,16 @@ func handleBookmarkLabelMessage(label: String, state: WebViewState) {
 // Runs on the OSC server's receive queue (not the main actor), so values are extracted here as
 // plain Sendable data before crossing over.
 @available(macOS 14, *)
-func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState) {
+func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: OutputStats) {
   let address = message.addressPattern.stringValue
   let values = message.values
+
+  // Recorded for recognized AND unrecognized addresses — this is a "did anything arrive"
+  // indicator for the status bar, not a log of handled commands.
+  Task { @MainActor in
+    stats.lastOSCAddress = address
+    stats.lastOSCDate = Date()
+  }
 
   switch address {
   case "/syphon/url":
@@ -139,11 +146,13 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState) {
 // Creates and starts a server in one step so bind failures propagate to the caller instead of
 // being swallowed.
 @available(macOS 14, *)
-private func makeStartedOSCServer(port: UInt16, state: WebViewState) throws -> OSCUDPServer {
+private func makeStartedOSCServer(
+  port: UInt16, state: WebViewState, stats: OutputStats
+) throws -> OSCUDPServer {
   let server = OSCUDPServer(
     port: port,
     receiveHandler: .messages { message, _, _, _ in
-      dispatchOSCMessage(message, state: state)
+      dispatchOSCMessage(message, state: state, stats: stats)
     }
   )
   try server.start()
@@ -164,10 +173,12 @@ final class OSCController: ObservableObject {
   @Published private(set) var port: UInt16?
 
   private let state: WebViewState
+  private let stats: OutputStats
   private var server: OSCUDPServer?
 
-  init(state: WebViewState) {
+  init(state: WebViewState, stats: OutputStats) {
     self.state = state
+    self.stats = stats
   }
 
   // Tries `port` first. If this profile has no explicitly saved `oscPort` default (a fresh
@@ -191,7 +202,7 @@ final class OSCController: ObservableObject {
     var lastError: Error?
     for candidate in candidates {
       do {
-        let newServer = try makeStartedOSCServer(port: candidate, state: state)
+        let newServer = try makeStartedOSCServer(port: candidate, state: state, stats: stats)
         server?.stop()
         server = newServer
         self.port = candidate

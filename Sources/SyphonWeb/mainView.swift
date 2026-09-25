@@ -3,6 +3,8 @@ import SwiftUI
 @available(macOS 14, *)
 struct MainView: View {
   @ObservedObject var state: WebViewState
+  @ObservedObject var stats: OutputStats
+  @ObservedObject var oscController: OSCController
   @State private var bookmarks: [Bookmark] = Bookmark.getAll()
   @State private var selectedId: Int64?
   @State private var showAddBookmark: Bool = false
@@ -84,9 +86,13 @@ struct MainView: View {
           }.padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }.frame(width: 200, alignment: .top)
-      WebView(state: state).frame(
-        width: state.previewSize.width, height: state.previewSize.height
-      )
+      VStack(spacing: 0) {
+        WebView(state: state, stats: stats).frame(
+          width: state.previewSize.width, height: state.previewSize.height
+        )
+        StatusBar(state: state, stats: stats, oscController: oscController)
+          .frame(width: state.previewSize.width, height: statusBarHeight)
+      }
     }
     .confirmationDialog("Really delete this bookmark?", isPresented: $showDeleteConfirm) {
       Button("Yes") {

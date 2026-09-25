@@ -40,6 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
   var state: WebViewState!
   var oscController: OSCController!
+  var outputStats: OutputStats!
   var settingsWindow: NSWindow?
   private var oscPortCancellable: AnyCancellable?
 
@@ -52,7 +53,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // or duplicate source names.
     state.frameServer = SyphonMetalServer(name: state.syphonName, device: metalDevice)
     self.state = state
-    self.oscController = OSCController(state: state)
+    let outputStats = OutputStats(state: state)
+    self.outputStats = outputStats
+    self.oscController = OSCController(state: state, stats: outputStats)
     // @Published publishes on willSet (i.e. with the incoming value, before the stored property
     // is actually updated) — use the value the sink receives directly rather than re-reading
     // `oscController.port` inside the closure, which would still see the old value.
@@ -63,12 +66,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Main Window, sized from the guessed backing scale; corrected below once on screen
     let initialPreview = state.previewSize
     let mainSize: CGSize = CGSize(
-      width: initialPreview.width + 200, height: initialPreview.height)
+      width: initialPreview.width + 200, height: initialPreview.height + statusBarHeight)
     mainWindow.setContentSize(mainSize)
     mainWindow.styleMask = [.closable, .titled]
     mainWindow.delegate = mainWindowDelegate
 
-    let mainViewInst = MainView(state: state)
+    let mainViewInst = MainView(state: state, stats: outputStats, oscController: oscController)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
     mainView.frame = CGRect(origin: .zero, size: mainSize)
     mainView.autoresizingMask = [.height, .width]
