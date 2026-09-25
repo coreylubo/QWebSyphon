@@ -180,6 +180,16 @@ self-check (pattern: `checkBookmarkLabelValidation()` in `bookmark.swift`) cover
 3. **Keep `--profile`** instances alongside multi-output.
 4. Idle capture: **per-output toggle** "Capture without clients" (default on), in that output's
    settings.
+5. (After the spike) **Outputs must keep running when the SyphonWeb window is fully covered.**
+   Design: all output web views live stacked in one invisible (alpha 0) window; the main window's
+   tiles show the captured frames (refresh ~15 Hz to keep it cheap). Needs its own checks:
+   full-screen apps on other Spaces, several displays, screen lock/sleep (still freezes — show
+   machines should disable both).
+6. (After the spike) **CPU capture is fine for now**; 2×1080p at ~54 fps is acceptable. The real
+   show setup is a main output plus a narrow "toast" column, so resolution must be **per-output
+   and custom (W×H)**, not only 720p/1080p. Capture cost is ~85% `layer.render` and scales with
+   pixel count, so a 960×1080 column should cost about half of 1080p (~4 ms, estimate — measure
+   in phase 2); 1080p + 960×1080 ≈ 12 ms fits the 12 ms deadline.
 
 ## Verification rules (carry over)
 
