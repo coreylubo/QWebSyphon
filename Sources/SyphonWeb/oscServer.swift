@@ -94,11 +94,9 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
   let values = message.values
 
   // Recorded for recognized AND unrecognized addresses — this is a "did anything arrive"
-  // indicator for the status bar, not a log of handled commands.
-  Task { @MainActor in
-    stats.lastOSCAddress = address
-    stats.lastOSCDate = Date()
-  }
+  // indicator for the status bar, not a log of handled commands. Written straight from the
+  // receive thread; the status tick publishes it once per second.
+  stats.recordOSC(address: address)
 
   switch address {
   case "/syphon/url":

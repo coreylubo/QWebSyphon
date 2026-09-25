@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 import SwiftUI
 
 // Fixed height of the status bar shown directly below the web view preview. Window sizing
@@ -14,8 +15,17 @@ let statusBarHeight: CGFloat = 24
 final class OutputStats: ObservableObject {
   @Published private(set) var fps: Int = 0
   @Published private(set) var hasClients: Bool = false
-  @Published var lastOSCAddress: String?
-  @Published var lastOSCDate: Date?
+  @Published private(set) var lastOSCAddress: String?
+  @Published private(set) var lastOSCDate: Date?
+
+  // Latest OSC activity, written from the OSC receive thread without hopping to the main actor
+  // (a high-rate sender would otherwise queue a main-actor task per packet).
+  private nonisolated let pendingOSC = OSAllocatedUnfairLock<(address: String, date: Date)?>(
+    initialState: nil)
+
+  nonisolated func recordOSC(address: String) {
+    pendingOSC.withLock { $0 = (address, Date()) }
+  }
 
   // Plain (non-published) per-frame counter. Incremented once per published frame in
   // WebView.captureFrame; read and reset by the 1 s tick below.
@@ -37,6 +47,10 @@ final class OutputStats: ObservableObject {
     fps = frameCount
     frameCount = 0
     hasClients = state?.frameServer?.hasClients ?? false
+    if let osc = pendingOSC.withLock({ $0 }), osc.date != lastOSCDate {
+      lastOSCAddress = osc.address
+      lastOSCDate = osc.date
+    }
   }
 }
 
