@@ -3,7 +3,8 @@ import SwiftUI
 @available(macOS 14, *)
 struct MainView: View {
   @ObservedObject var state: WebViewState
-  @ObservedObject var stats: OutputStats
+  // Plain reference: only StatusBar observes it, so the 1 s stats tick doesn't re-render MainView
+  let stats: OutputStats
   @ObservedObject var oscController: OSCController
   @State private var bookmarks: [Bookmark] = Bookmark.getAll()
   @State private var selectedId: Int64?

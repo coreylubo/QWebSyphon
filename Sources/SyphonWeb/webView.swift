@@ -206,21 +206,22 @@ extension WKWebView {
 }
 
 struct WebView: NSViewRepresentable {
-  let webView: WKWebView = WKWebView()
-
   @ObservedObject var state: WebViewState
   // Plain reference (not @ObservedObject): WebView only writes frameCount here, it doesn't need
   // to re-render when OutputStats' published stats change.
   let stats: OutputStats
 
   func makeNSView(context: Context) -> WKWebView {
+    // Created here, not as a stored property: the struct is rebuilt on every SwiftUI render, and a
+    // stored WKWebView would be allocated each time even though only this one is ever used.
+    let webView = WKWebView()
     webView.navigationDelegate = context.coordinator
     state.webView = webView
     webView.load(URLRequest(url: state.url))
 
     Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
       Task { @MainActor in
-        captureFrame()
+        captureFrame(webView: webView)
       }
     }
 
@@ -234,7 +235,7 @@ struct WebView: NSViewRepresentable {
     print("Time elapsed for \(title): \(timeElapsed) s.")
   }
 
-  func captureFrame() {
+  func captureFrame(webView: WKWebView) {
     if state.texture != nil && state.graphicsContext != nil && !state.loading {
       let commandBuffer: (any MTLCommandBuffer)? = state.commandQueue?.makeCommandBuffer()
 
@@ -257,8 +258,7 @@ struct WebView: NSViewRepresentable {
       state.currentUrl = state.url
     }
 
-    // Apply background transparency to the live view (never `self.webView`, which may not be the
-    // instance actually on screen). `drawsBackground` is undocumented KVC on WKWebView; guarded so
+    // Apply background transparency to the live view. `drawsBackground` is undocumented KVC on WKWebView; guarded so
     // an unrecognized key never crashes.
     let coordinator = context.coordinator
     if state.transparentBackground != coordinator.lastTransparentBackground {

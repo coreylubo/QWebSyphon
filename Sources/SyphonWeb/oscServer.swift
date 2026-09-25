@@ -26,7 +26,8 @@ func resolveBookmarkURL(name: String?, position: Int?, in bookmarks: [OSCBookmar
 
   if let position {
     let ordered = bookmarks.filter(\.favorite) + bookmarks.filter { !$0.favorite }
-    guard ordered.indices.contains(position - 1) else { return nil }
+    // position > 0 first so Int.min can't overflow the subtraction
+    guard position > 0, ordered.indices.contains(position - 1) else { return nil }
     return ordered[position - 1].url
   }
 
