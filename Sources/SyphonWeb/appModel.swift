@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import CoreGraphics
 import Metal
@@ -36,20 +37,43 @@ struct OutputConfig: Codable, Equatable, Sendable {
   var customSize: PixelSize?
   var transparentBackground: Bool
   var captureWithoutClients: Bool
+  // The bookmark this output was last opened from (`Output.open(bookmark:)`), or nil if its URL
+  // was set some other way (`navigate(to:)`, OSC `/url`, a fresh default). `Optional` for the same
+  // reason as `customSize`: omitted entirely when nil so phase 1/2 JSON stays byte-identical, and
+  // missing on old JSON decodes to nil rather than failing.
+  var bookmarkID: Int64?
 
   static func makeDefault(id: UUID = UUID(), name: String = defaultSyphonName()) -> OutputConfig {
     OutputConfig(
       id: id, name: name, url: defaultOutputURL, resolution: .hd720, transparentBackground: false,
-      captureWithoutClients: true)
+      captureWithoutClients: true, bookmarkID: nil)
   }
 }
 
-// Pure check for a rename/add/duplicate: trimmed, non-empty, unique case-insensitively among
-// `existing` (the OTHER outputs' names — the caller excludes the output being renamed), and not
-// one of the reserved command words. Returns an error message, or nil if `name` is valid as-is.
+// The OSC slug rule (spec "OSC" section, reused here since output names ARE the slugs): only
+// letters, numbers, `-` and `_`, non-empty, at most 64 characters, and not all-digits (an
+// all-digit name would collide with the 1-based OSC index). Doesn't check reserved words or
+// uniqueness — those are separate concerns (`validateOutputName`). Used by the UI (cluster 3) to
+// show a "rename to address by name over OSC" hint on grandfathered pre-slug names, and will be
+// used by the OSC route resolver (cluster 2) for the same rule.
+func isOSCAddressableName(_ name: String) -> Bool {
+  guard !name.isEmpty, name.count <= 64, !name.allSatisfy(\.isNumber) else { return false }
+  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+  return name.allSatisfy(allowed.contains)
+}
+
+// Pure check for a rename/add/duplicate: trimmed, matches the OSC slug rule, not one of the
+// reserved command words, and unique case-insensitively among `existing` (the OTHER outputs'
+// names — the caller excludes the output being renamed). Returns an error message, or nil if
+// `name` is valid as-is. Pre-slug names loaded from disk (phase 1/2, e.g. "SyphonWeb left") are
+// grandfathered in `sanitizeOutputConfigs`/migration, which never call this — it only gates NEW
+// names.
 func validateOutputName(_ name: String, existing: [String]) -> String? {
   let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return "Name can't be empty" }
+  if !isOSCAddressableName(trimmed) {
+    return "Names may only contain letters, numbers, - and _, up to 64 characters, and can't be only numbers"
+  }
   if reservedOutputNames.contains(trimmed.lowercased()) {
     return "\"\(trimmed)\" is a reserved name"
   }
@@ -60,14 +84,27 @@ func validateOutputName(_ name: String, existing: [String]) -> String? {
 }
 
 // `base` if it doesn't collide (case-insensitively) with anything in `existing`, else
-// "<base> 2", "<base> 3", ... until one doesn't.
+// "<base>-2", "<base>-3", ... until one doesn't. Hyphenated (not space-separated) so a unique
+// default/duplicate name is always OSC-addressable when `base` already is.
 func uniqueOutputName(base: String, existing: [String]) -> String {
   let existingLower = Set(existing.map { $0.lowercased() })
   guard existingLower.contains(base.lowercased()) else { return base }
   var suffix = 2
-  while existingLower.contains("\(base) \(suffix)".lowercased()) { suffix += 1 }
-  return "\(base) \(suffix)"
+  while existingLower.contains("\(base)-\(suffix)".lowercased()) { suffix += 1 }
+  return "\(base)-\(suffix)"
 }
+
+// Replaces every character outside the OSC slug alphabet with "-". Used by `defaultOutputBaseName`
+// so newly generated output names are always OSC-addressable, regardless of profile name.
+func slugForOutputName(_ name: String) -> String {
+  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+  return String(name.map { allowed.contains($0) ? $0 : "-" })
+}
+
+// Base name for newly added/default outputs: a slug of `defaultSyphonName()` (e.g. "SyphonWeb
+// left" -> "SyphonWeb-left"), so `uniqueOutputName(base: defaultOutputBaseName(), ...)` always
+// produces an OSC-addressable name.
+func defaultOutputBaseName() -> String { slugForOutputName(defaultSyphonName()) }
 
 // Repairs a loaded/decoded `[OutputConfig]` so an `Output` can always be built from the result:
 // truncates to `maxOutputs`, fixes blank/duplicate/reserved names, unparseable URLs, duplicate
@@ -128,6 +165,28 @@ func captureOrder(ids: [UUID], startID: UUID?) -> [UUID] {
   return Array(ids[start...] + ids[..<start])
 }
 
+// Pure matcher for "which bookmarks are live in which outputs" (the sidebar's globe icon,
+// cluster 3). Per output: `bookmarkID` wins outright if set (even if that id no longer appears in
+// `bookmarks` — the caller just won't find a row to mark); otherwise the FIRST bookmark in
+// `bookmarks` order whose normalized URL equals the output's `url` is used. Either way, at most
+// one bookmark is ever live per output. `bookmarks` must already be in sidebar order (favorites
+// first, then the rest, each in `Bookmark.getAll()` order) for the "first match" rule to line up
+// with what the UI shows. Output lists in the result are in `outputs` order.
+func liveBookmarkIDs(
+  outputs: [(id: UUID, url: URL, bookmarkID: Int64?)],
+  bookmarks: [(id: Int64, url: String)]
+) -> [Int64: [UUID]] {
+  var result: [Int64: [UUID]] = [:]
+  for output in outputs {
+    let liveID =
+      output.bookmarkID ?? bookmarks.first { Output.normalizedURL($0.url) == output.url }?.id
+    if let liveID {
+      result[liveID, default: []].append(output.id)
+    }
+  }
+  return result
+}
+
 func encodeOutputs(_ configs: [OutputConfig]) -> String {
   let encoder = JSONEncoder()
   encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -158,7 +217,7 @@ struct OutputsLoad: Equatable {
 //   output in memory, nothing written (kept for inspection/rollback).
 // - No `outputs` and no marker: build output #1 (the legacy output) from the legacy keys.
 func migrateOutputs(
-  defaults: UserDefaults, defaultName: String = defaultSyphonName(), newID: UUID = UUID()
+  defaults: UserDefaults, defaultName: String = defaultOutputBaseName(), newID: UUID = UUID()
 ) -> OutputsLoad {
   let storedLegacyID = defaults.string(forKey: legacyOutputIDKey).flatMap(UUID.init(uuidString:))
   let stored = defaults.object(forKey: outputsKey)
@@ -199,7 +258,7 @@ func migrateOutputs(
 // only then `legacyOutputID` + `outputsMigrationVersion = 1`. A failed read-back leaves the
 // marker unset so the next launch retries. `write` is injectable for the self-check.
 func loadOutputs(
-  defaults: UserDefaults, defaultName: String = defaultSyphonName(),
+  defaults: UserDefaults, defaultName: String = defaultOutputBaseName(),
   write: ((String) -> Void)? = nil
 ) -> OutputsLoad {
   let load = migrateOutputs(defaults: defaults, defaultName: defaultName)
@@ -247,6 +306,7 @@ final class AppModel: ObservableObject {
   private var nextCaptureID: UUID?
   // Spike budget rule: past ~12 ms of capture per tick, the pages' own rAF and WebKit commits starve
   private let captureDeadline: TimeInterval = 0.012
+  private var cancellables: Set<AnyCancellable> = []
 
   init(defaults: UserDefaults = appDefaults) {
     self.defaults = defaults
@@ -258,10 +318,10 @@ final class AppModel: ObservableObject {
     var persist = load.persist
     if configs.isEmpty {
       appLog("`outputs` is empty; using one default output in memory (not saved)")
-      configs = [.makeDefault(name: defaultSyphonName())]
+      configs = [.makeDefault(name: defaultOutputBaseName())]
       persist = false
     }
-    let sanitized = sanitizeOutputConfigs(configs, defaultName: defaultSyphonName())
+    let sanitized = sanitizeOutputConfigs(configs, defaultName: defaultOutputBaseName())
     configs = sanitized.configs
     if sanitized.repaired {
       appLog("Loaded `outputs` needed repair (cap/name/url/size/id); not saved this session")
@@ -276,6 +336,15 @@ final class AppModel: ObservableObject {
     selectedOutputID = outputs[0].id
     for output in outputs {
       output.onConfigChange = { [weak self] in self?.saveOutputs() }
+    }
+
+    // Bookmarks require macOS 14 (`@Observable`); the app itself only runs on macOS 14+ (see
+    // main.swift's `#available` gate), so this always runs in practice.
+    if #available(macOS 14, *) {
+      reconcileBookmarkIDs(Bookmark.getAll())
+      bookmarksDidChangePublisher
+        .sink { [weak self] _ in self?.reconcileBookmarkIDs(Bookmark.getAll()) }
+        .store(in: &cancellables)
     }
   }
 
@@ -293,12 +362,12 @@ final class AppModel: ObservableObject {
   }
 
   // Adds a new output with a default config (720p, default URL) and a unique default-based name
-  // ("SyphonWeb", "SyphonWeb 2", …). Nil at `maxOutputs`.
+  // ("SyphonWeb", "SyphonWeb-2", …). Nil at `maxOutputs`.
   @discardableResult
   func addOutput() -> Output? {
     guard outputs.count < maxOutputs else { return nil }
     let name = uniqueOutputName(
-      base: defaultSyphonName(), existing: outputs.map(\.name) + reservedOutputNames)
+      base: defaultOutputBaseName(), existing: outputs.map(\.name) + reservedOutputNames)
     let output = Output(config: .makeDefault(name: name))
     output.onConfigChange = { [weak self] in self?.saveOutputs() }
     outputs.append(output)
@@ -307,7 +376,7 @@ final class AppModel: ObservableObject {
   }
 
   // Copies url/resolution/customSize/transparent/captureWithoutClients from `id`'s output into a
-  // new one named "<name> copy" (made unique). Nil if `id` doesn't exist or at `maxOutputs`.
+  // new one named "<name>-copy" (made unique). Nil if `id` doesn't exist or at `maxOutputs`.
   @discardableResult
   func duplicateOutput(_ id: UUID) -> Output? {
     guard outputs.count < maxOutputs, let source = outputs.first(where: { $0.id == id }) else {
@@ -315,8 +384,9 @@ final class AppModel: ObservableObject {
     }
     var config = source.config
     config.id = UUID()
+    config.bookmarkID = nil
     config.name = uniqueOutputName(
-      base: "\(source.name) copy", existing: outputs.map(\.name) + reservedOutputNames)
+      base: "\(source.name)-copy", existing: outputs.map(\.name) + reservedOutputNames)
     let output = Output(config: config)
     output.onConfigChange = { [weak self] in self?.saveOutputs() }
     outputs.append(output)
@@ -350,6 +420,26 @@ final class AppModel: ObservableObject {
     output.name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
     saveOutputs()
     return nil
+  }
+
+  // Clears any output's `bookmarkID` whose bookmark is gone or whose URL no longer matches (the
+  // bookmark was deleted, or its URL was edited elsewhere). Called at launch and on every
+  // `bookmarksDidChangePublisher` event (delete, URL edit, another profile's changes) so a stale
+  // `bookmarkID` never outlives what it pointed to.
+  @available(macOS 14, *)
+  func reconcileBookmarkIDs(_ bookmarks: [Bookmark]) {
+    var changed = false
+    for output in outputs {
+      guard let bookmarkID = output.bookmarkID else { continue }
+      let stillMatches = bookmarks.contains {
+        $0.id == bookmarkID && Output.normalizedURL($0.url) == output.url
+      }
+      if !stillMatches {
+        output.bookmarkID = nil
+        changed = true
+      }
+    }
+    if changed { saveOutputs() }
   }
 
   // One 60 Hz driver for all outputs, in `.common` mode so capture keeps running during menu
@@ -527,18 +617,55 @@ func makeTileImage(_ context: CGContext) -> CGImage? {
     precondition(validateOutputName("bookmark", existing: []) != nil)
     precondition(validateOutputName("Refresh", existing: []) != nil)
     precondition(validateOutputName("  Toast  ", existing: ["Main"]) == nil)
-
-    // uniqueOutputName
-    precondition(uniqueOutputName(base: "SyphonWeb", existing: []) == "SyphonWeb")
-    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb"]) == "SyphonWeb 2")
+    // validateOutputName: slug rule (chars, all-digits, max 64)
+    precondition(validateOutputName("My Output", existing: []) != nil, "space not allowed")
+    precondition(validateOutputName("123", existing: []) != nil, "all-digits not allowed")
     precondition(
-      uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb", "SyphonWeb 2"]) == "SyphonWeb 3")
-    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["syphonweb"]) == "SyphonWeb 2")
+      validateOutputName(String(repeating: "a", count: 65), existing: []) != nil, "over 64 chars")
+    precondition(
+      validateOutputName(String(repeating: "a", count: 64), existing: []) == nil, "64 chars is ok")
+    precondition(validateOutputName("My-Output_1", existing: []) == nil)
 
-    // OutputConfig JSON: preset-only omits `customSize` (phase 1 shape, byte-identical)
+    // isOSCAddressableName: the slug rule alone, no reserved/uniqueness check
+    precondition(isOSCAddressableName("Main"))
+    precondition(isOSCAddressableName("a1"))
+    precondition(!isOSCAddressableName(""))
+    precondition(!isOSCAddressableName("SyphonWeb left"), "space")
+    precondition(!isOSCAddressableName("123"), "all digits")
+    precondition(!isOSCAddressableName(String(repeating: "a", count: 65)), "over 64 chars")
+    precondition(isOSCAddressableName(String(repeating: "a", count: 64)))
+    // isOSCAddressableName doesn't reject reserved words or check uniqueness (separate concerns)
+    precondition(isOSCAddressableName("url"))
+
+    // slugForOutputName / defaultOutputBaseName
+    precondition(slugForOutputName("SyphonWeb left") == "SyphonWeb-left")
+    precondition(slugForOutputName("a/b c") == "a-b-c")
+    precondition(isOSCAddressableName(defaultOutputBaseName()), "must always be a valid slug")
+
+    // uniqueOutputName: "-N" suffix (not " N"), so a unique/default name is always slug-shaped
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: []) == "SyphonWeb")
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb"]) == "SyphonWeb-2")
+    precondition(
+      uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb", "SyphonWeb-2"]) == "SyphonWeb-3")
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["syphonweb"]) == "SyphonWeb-2")
+
+    // Grandfathering: a unique non-slug name (e.g. legacy "SyphonWeb left") loads as-is, not
+    // treated as needing repair — sanitize only touches blank/duplicate/reserved names, never the
+    // slug rule.
+    let grandfathered = [OutputConfig.makeDefault(name: "SyphonWeb left")]
+    let keptAsIs = sanitizeOutputConfigs(grandfathered, defaultName: "Default")
+    precondition(!keptAsIs.repaired && keptAsIs.configs[0].name == "SyphonWeb left")
+    // ...but duplicates of a grandfathered name are still deduped like any other name
+    let dupNonSlug = [
+      OutputConfig.makeDefault(name: "SyphonWeb left"), OutputConfig.makeDefault(name: "SyphonWeb left"),
+    ]
+    let dedupedNonSlug = sanitizeOutputConfigs(dupNonSlug, defaultName: "Default")
+    precondition(dedupedNonSlug.repaired && Set(dedupedNonSlug.configs.map(\.name)).count == 2)
+
+    // OutputConfig JSON: preset-only omits `customSize`/`bookmarkID` (phase 1/2 shape, byte-identical)
     let preset = OutputConfig.makeDefault(name: "Preset")
     let presetJSON = encodeOutputs([preset])
-    precondition(!presetJSON.contains("customSize"))
+    precondition(!presetJSON.contains("customSize") && !presetJSON.contains("bookmarkID"))
     precondition(decodeOutputs(presetJSON) == [preset])
 
     // customSize round-trips
@@ -547,6 +674,29 @@ func makeTileImage(_ context: CGContext) -> CGImage? {
     let customJSON = encodeOutputs([custom])
     precondition(customJSON.contains("customSize"))
     precondition(decodeOutputs(customJSON) == [custom])
+
+    // bookmarkID round-trips, omitted when nil
+    var withBookmark = preset
+    withBookmark.bookmarkID = 42
+    let withBookmarkJSON = encodeOutputs([withBookmark])
+    precondition(withBookmarkJSON.contains("bookmarkID"))
+    precondition(decodeOutputs(withBookmarkJSON) == [withBookmark])
+
+    // liveBookmarkIDs: explicit bookmarkID wins outright (even pointing at a deleted bookmark);
+    // nil bookmarkID falls back to the FIRST bookmark (in order) whose URL matches
+    let (o1, o2, o3) = (UUID(), UUID(), UUID())
+    let urlA = Output.normalizedURL("https://a.example")!
+    let urlB = Output.normalizedURL("https://b.example")!
+    let live = liveBookmarkIDs(
+      outputs: [
+        (id: o1, url: urlA, bookmarkID: 1),
+        (id: o2, url: urlA, bookmarkID: nil),
+        (id: o3, url: urlB, bookmarkID: 99),
+      ],
+      bookmarks: [(id: 1, url: "https://a.example"), (id: 2, url: "https://a.example")])
+    precondition(live[1] == [o1, o2], "bookmarkID match and URL-fallback match both key id 1")
+    precondition(live[99] == [o3], "bookmarkID keys the result even with no matching bookmark row")
+    precondition(live[2] == nil, "second duplicate-URL bookmark never wins the fallback")
 
     // Out-of-bounds customSize decodes (doesn't fail the whole array) and sanitize drops it
     let badJSON = """

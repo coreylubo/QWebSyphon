@@ -5,31 +5,33 @@ import SwiftOSC
 let defaultOSCPort: UInt16 = 9000
 private let bookmarkAddressPrefix = "/syphon/bookmark/"
 
-// A bookmark's name/url/favorite flag, stripped of the SQLite-backed `Bookmark` class so the
-// dispatch logic below can be tested without a database.
+// A bookmark's id/name/url/favorite flag, stripped of the SQLite-backed `Bookmark` class so the
+// dispatch logic below can be tested without a database. `id` lets the caller open the real
+// `Bookmark` (for `Output.open(bookmark:)`) once a match is found.
 struct OSCBookmarkEntry {
+  let id: Int64
   let name: String
   let url: String
   let favorite: Bool
 }
 
-// Resolves an OSC `/syphon/bookmark` argument to a URL. `name` matches case-insensitively
-// (trimmed). `position` is a 1-based index into sidebar display order: favorites first, then
-// non-favorites, each preserving `bookmarks` order (matches MainView's two sections). Returns nil
-// on no match.
-func resolveBookmarkURL(name: String?, position: Int?, in bookmarks: [OSCBookmarkEntry]) -> String? {
+// Resolves an OSC `/syphon/bookmark` argument to a bookmark entry. `name` matches
+// case-insensitively (trimmed). `position` is a 1-based index into sidebar display order:
+// favorites first, then non-favorites, each preserving `bookmarks` order (matches MainView's two
+// sections). Returns nil on no match.
+func resolveBookmark(name: String?, position: Int?, in bookmarks: [OSCBookmarkEntry]) -> OSCBookmarkEntry? {
   if let name {
     let target = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return bookmarks.first {
       $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == target
-    }?.url
+    }
   }
 
   if let position {
     let ordered = bookmarks.filter(\.favorite) + bookmarks.filter { !$0.favorite }
     // position > 0 first so Int.min can't overflow the subtraction
     guard position > 0, ordered.indices.contains(position - 1) else { return nil }
-    return ordered[position - 1].url
+    return ordered[position - 1]
   }
 
   return nil
@@ -59,20 +61,23 @@ func integralOSCValue(_ value: any OSCValue) -> Int? {
 @MainActor
 func handleBookmarkMessage(name: String?, position: Int?, state: Output) {
   if let name, let byLabel = Bookmark.find(label: name) {
-    state.navigate(to: byLabel.url)
+    state.open(bookmark: byLabel)
     return
   }
 
-  let entries = Bookmark.getAll().map {
-    OSCBookmarkEntry(name: $0.name, url: $0.url, favorite: $0.favorite)
+  let all = Bookmark.getAll()
+  let entries = all.map {
+    OSCBookmarkEntry(id: $0.id, name: $0.name, url: $0.url, favorite: $0.favorite)
   }
 
-  guard let url = resolveBookmarkURL(name: name, position: position, in: entries) else {
+  guard let match = resolveBookmark(name: name, position: position, in: entries),
+    let bookmark = all.first(where: { $0.id == match.id })
+  else {
     appLog("OSC: /syphon/bookmark no match for \(name ?? position.map(String.init) ?? "<none>")")
     return
   }
 
-  state.navigate(to: url)
+  state.open(bookmark: bookmark)
 }
 
 // `/syphon/bookmark/<label>`: looks up the bookmark by its exact OSC label.
@@ -83,7 +88,7 @@ func handleBookmarkLabelMessage(label: String, state: Output) {
     appLog("OSC: \(bookmarkAddressPrefix)\(label) no match")
     return
   }
-  state.navigate(to: bookmark.url)
+  state.open(bookmark: bookmark)
 }
 
 // Parses one incoming OSC message and hops to the main actor for anything that touches an

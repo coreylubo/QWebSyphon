@@ -134,7 +134,7 @@ private struct SidebarContent: View {
     }.listStyle(.sidebar)
       .contextMenu(forSelectionType: Int64.self) { ids in
         if let bookmark = singleBookmark(ids) {
-          Button("Open") { output.navigate(to: bookmark.url) }
+          Button("Open") { output.open(bookmark: bookmark) }
           Button("Edit…") { editingId = bookmark.id }
           Button(bookmark.favorite ? "Unfavorite" : "Favorite") {
             bookmark.toggleFavorite()
@@ -148,7 +148,7 @@ private struct SidebarContent: View {
         }
       } primaryAction: { ids in
         if let bookmark = singleBookmark(ids) {
-          output.navigate(to: bookmark.url)
+          output.open(bookmark: bookmark)
         }
       }
       .safeAreaInset(edge: .bottom) {

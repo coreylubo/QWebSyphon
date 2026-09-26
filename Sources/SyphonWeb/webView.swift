@@ -118,6 +118,13 @@ final class Output: ObservableObject, Identifiable {
   // When false, capture is skipped while the Syphon server has no clients. No UI yet.
   @Published var captureWithoutClients: Bool { didSet { onConfigChange?() } }
 
+  // The bookmark this output was last opened from, or nil if its URL came from somewhere else
+  // (`navigate(to:)`, a fresh default, OSC `/url`). Set only by `open(bookmark:)`; cleared by
+  // `navigate(to:)`. Reconciled by `AppModel.reconcileBookmarkIDs` when bookmarks change (delete,
+  // URL edit) so a stale id never outlives what it pointed to. Used by `liveBookmarkIDs` for the
+  // sidebar's live-bookmark matching.
+  @Published var bookmarkID: Int64? { didSet { onConfigChange?() } }
+
   // Backing scale factor (1x/2x) of the window hosting this output's web view (OutputHost's
   // window, which keeps it current as the host follows the main window between screens).
   @Published var backingScale: CGFloat = 2.0
@@ -136,6 +143,7 @@ final class Output: ObservableObject, Identifiable {
     customSize = config.customSize
     transparentBackground = config.transparentBackground
     captureWithoutClients = config.captureWithoutClients
+    bookmarkID = config.bookmarkID
     stats = OutputStats()
     stats.output = self
     // Created with the final name up front (not renamed afterwards): QLab and other clients only
@@ -147,7 +155,8 @@ final class Output: ObservableObject, Identifiable {
   var config: OutputConfig {
     OutputConfig(
       id: id, name: name, url: url.absoluteString, resolution: resolution, customSize: customSize,
-      transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients)
+      transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients,
+      bookmarkID: bookmarkID)
   }
 
   // Effective output pixel size: the custom size if set, else the preset's.
@@ -200,11 +209,23 @@ final class Output: ObservableObject, Identifiable {
     return URL(string: (isLocal ? "http://" : "https://") + trimmed)
   }
 
-  // Normalizes a string and navigates the web view to it
+  // Normalizes a string and navigates the web view to it. For non-bookmark URLs only — clears
+  // `bookmarkID`. Bookmark-originated opens use `open(bookmark:)` instead, so the live-bookmark
+  // matching in the sidebar keeps working.
   func navigate(to urlString: String) {
     if let urlToNavigate = Output.normalizedURL(urlString) {
       url = urlToNavigate
+      bookmarkID = nil
     }
+  }
+
+  // Navigates to a bookmark's URL and records which bookmark it came from (`bookmarkID`), so the
+  // sidebar's live-bookmark matching (`liveBookmarkIDs`) can find it even after a later rename.
+  @available(macOS 14, *)
+  func open(bookmark: Bookmark) {
+    guard let urlToNavigate = Output.normalizedURL(bookmark.url) else { return }
+    url = urlToNavigate
+    bookmarkID = bookmark.id
   }
 
   func reload() {
