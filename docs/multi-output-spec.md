@@ -322,3 +322,20 @@ counter was constant; freshness was proven by the unlocked runs above.)
 5. `alphaValue = 0.01` views are captured with that alpha applied and cost 3x (10.9 ms at 720p).
 6. `NSView.displayLink` (macOS 14) and a `.common` `Timer` performed the same; the display link
    had slightly steadier per-second rAF (min 60 vs 59). Either is fine.
+
+## Phase 1 notes (2026-09-25)
+
+Deviations and interpretations in the phase 1 refactor:
+
+- `outputs` is stored as a JSON **string** (readable in `defaults read`), keys sorted.
+- OSC activity (last address/time, lock-free) moved from `OutputStats` to `OSCController`: it is
+  app-wide, recorded before routing. `OutputStats` is per output (fps, hasClients).
+- `captureWithoutClients` is honored by capture (default true, no UI).
+- In-memory fallbacks never persist: corrupt `outputs`, `outputs` missing while the marker is
+  set, an empty array, or more than one output (phase 1 keeps the legacy-or-first one). Settings
+  changes in those sessions are not saved, so stored data is never overwritten.
+- Behavior changes: capture runs in `.common` mode (continues during menu tracking/drags); the
+  current URL is persisted, so the app reopens the last page instead of the default.
+- Pre-existing, not fixed: `NSLog("Loading URL: \(url)")` etc. pass the URL as the format string,
+  so `%` escapes in a URL are read as format specifiers (log shows `data:text/html,` for a
+  percent-encoded data: URL).

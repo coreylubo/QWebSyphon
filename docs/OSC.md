@@ -44,7 +44,7 @@ Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
 
 ## Commands
 
-Every message — recognized or not — is recorded via `stats.recordOSC(address:)` before any
+Every message — recognized or not — is recorded via `controller.recordOSC(address:)` before any
 dispatch logic runs, so the status bar's "last OSC message" always reflects the most recent packet
 received, whether or not SyphonWeb understood it.
 
@@ -53,7 +53,7 @@ received, whether or not SyphonWeb understood it.
 Loads a URL. The first argument must be a string (`values.first as? String`; extra arguments are
 ignored); any other type is logged ("`/syphon/url requires a string argument, ignoring`") and dropped.
 
-The string is normalized by `WebViewState.normalizedURL` before navigating:
+The string is normalized by `Output.normalizedURL` before navigating:
 
 - Trimmed of leading/trailing whitespace; an empty result is ignored.
 - **Kept as-is (scheme preserved)** if it starts with `<scheme>://` (regex
@@ -119,13 +119,13 @@ A bookmark's label (when set) also appears as its own row in Settings → OSC Co
   receive queue, **not** the main actor.
 - `dispatchOSCMessage` extracts the address and argument values as plain (`Sendable`) data on that
   thread, then wraps the actual state mutation (`state.navigate`, `state.reload`, bookmark lookups)
-  in `Task { @MainActor in ... }` to hop onto the main actor, since `WebViewState` and `Bookmark`
+  in `Task { @MainActor in ... }` to hop onto the main actor, since `Output` and `Bookmark`
   require it.
 - The "last OSC message" indicator is written from the receive thread through an
-  `OSAllocatedUnfairLock`-protected value (`OutputStats.recordOSC`), not by hopping to the main
-  actor per packet — the status bar's 1-second timer tick reads and publishes it, so a
+  `OSAllocatedUnfairLock`-protected value (`OSCController.recordOSC`), not by hopping to the main
+  actor per packet — the OSC controller's 1-second tick reads and publishes it, so a
   high-rate sender doesn't queue a main-actor task per packet just for the indicator.
-- Unknown/unhandled addresses are logged (`NSLog("OSC: ignoring unhandled address ...")`) and still
+- Unknown/unhandled addresses are logged (`OSC: ignoring unhandled address ...`) and still
   update the "last OSC message" indicator — the status bar shows *something arrived*, not just
   *something was understood*.
 

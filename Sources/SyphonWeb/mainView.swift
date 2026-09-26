@@ -2,9 +2,8 @@ import SwiftUI
 
 @available(macOS 14, *)
 struct MainView: View {
-  @ObservedObject var state: WebViewState
-  // Plain reference: only StatusBar observes it, so the 1 s stats tick doesn't re-render MainView
-  let stats: OutputStats
+  // The selected output (phase 1: the only one)
+  @ObservedObject var state: Output
   @ObservedObject var oscController: OSCController
   @State private var bookmarks: [Bookmark] = Bookmark.getAll()
   @State private var selectedId: Int64?
@@ -88,10 +87,10 @@ struct MainView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }.frame(width: 200, alignment: .top)
       VStack(spacing: 0) {
-        WebView(state: state, stats: stats).frame(
+        WebView(state: state).frame(
           width: state.previewSize.width, height: state.previewSize.height
         )
-        StatusBar(state: state, stats: stats, oscController: oscController)
+        StatusBar(state: state, stats: state.stats, oscController: oscController)
           .frame(width: state.previewSize.width, height: statusBarHeight)
       }
     }
@@ -119,7 +118,7 @@ struct MainView: View {
 
   // Live = the bookmark's URL is what the web view was last told to load
   func isLive(_ bookmark: Bookmark) -> Bool {
-    WebViewState.normalizedURL(bookmark.url) == state.url
+    Output.normalizedURL(bookmark.url) == state.url
   }
 
   @ViewBuilder func makeBookmark(bookmark: Bookmark) -> some View {

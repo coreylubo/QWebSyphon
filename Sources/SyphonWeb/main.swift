@@ -12,6 +12,7 @@ activity = ProcessInfo().beginActivity(
 
 #if DEBUG
   checkBookmarkLabelValidation()
+  checkOutputsMigration()
 #endif
 
 // Init metal and SQLite. The Syphon server itself is created per-instance in
@@ -38,24 +39,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
 
   // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
-  var state: WebViewState!
+  var model: AppModel!
   var oscController: OSCController!
-  var outputStats: OutputStats!
   var settingsWindow: NSWindow?
   private var oscPortCancellable: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
-    // Create state object (default resolution, guessed backing scale until the window is shown)
-    let state: WebViewState = WebViewState()
-    // Created with the final name up front (not renamed afterwards): QLab and other clients only
-    // read the name from the initial Syphon announce, so a later rename leaves them showing stale
-    // or duplicate source names.
-    state.frameServer = SyphonMetalServer(name: state.syphonName, device: metalDevice)
-    self.state = state
-    let outputStats = OutputStats(state: state)
-    self.outputStats = outputStats
-    self.oscController = OSCController(state: state, stats: outputStats)
+    // Loads (and on first launch migrates) the outputs and creates each output's Syphon server
+    // with its final name.
+    let model = AppModel()
+    self.model = model
+    let state = model.selectedOutput
+    self.oscController = OSCController(model: model)
     // @Published publishes on willSet (i.e. with the incoming value, before the stored property
     // is actually updated) — use the value the sink receives directly rather than re-reading
     // `oscController.port` inside the closure, which would still see the old value.
@@ -71,7 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.styleMask = [.closable, .titled]
     mainWindow.delegate = mainWindowDelegate
 
-    let mainViewInst = MainView(state: state, stats: outputStats, oscController: oscController)
+    let mainViewInst = MainView(state: state, oscController: oscController)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
     mainView.frame = CGRect(origin: .zero, size: mainSize)
     mainView.autoresizingMask = [.height, .width]
@@ -81,27 +77,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // The pre-display backing scale is unreliable; read the real value now that the window is on
     // screen, and keep it current when the window moves between 1x/2x screens.
-    state.backingScale = mainWindow.backingScaleFactor
+    // Phase 1: every output's web view lives in the main window.
+    for output in model.outputs { output.backingScale = mainWindow.backingScaleFactor }
     let window = mainWindow
     NotificationCenter.default.addObserver(
       forName: NSWindow.didChangeBackingPropertiesNotification, object: window, queue: .main
     ) { _ in
       Task { @MainActor in
-        state.backingScale = window.backingScaleFactor
+        for output in model.outputs { output.backingScale = window.backingScaleFactor }
       }
     }
 
     setupAppMenu()
 
-    oscController.start(port: state.oscPort)
+    model.startCapture()
+    oscController.start(port: model.oscPort)
 
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    // Stop the Syphon server explicitly so clients drop the source cleanly on quit.
-    state.frameServer?.stop()
+    // Stop every Syphon server explicitly so clients drop the sources cleanly on quit.
+    for output in model.outputs { output.frameServer?.stop() }
   }
 
   // "SyphonWeb — left · OSC 9001" (profile + actual bound port), or "SyphonWeb · OSC 9000"
@@ -169,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func reloadPage() {
-    state.reload()
+    model.selectedOutput.reload()
   }
 
   @objc private func showSettings() {
@@ -179,7 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
 
-    let settingsViewInst = SettingsView(state: state, oscController: oscController)
+    let settingsViewInst = SettingsView(model: model, state: model.selectedOutput, oscController: oscController)
     let hostingView = NSHostingView(rootView: settingsViewInst)
 
     let window = NSWindow(

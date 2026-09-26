@@ -19,7 +19,9 @@ private let oscCommands: [OSCCommandInfo] = [
 
 @available(macOS 14, *)
 struct SettingsView: View {
-  @ObservedObject var state: WebViewState
+  let model: AppModel
+  // The selected output (phase 1: the only one); name, resolution and transparency edit its config
+  @ObservedObject var state: Output
   @ObservedObject var oscController: OSCController
 
   @State private var portText: String = ""
@@ -103,8 +105,8 @@ struct SettingsView: View {
     .formStyle(.grouped)
     .frame(minWidth: 420, minHeight: 480)
     .onAppear {
-      portText = String(state.oscPort)
-      syphonNameText = state.syphonName
+      portText = String(model.oscPort)
+      syphonNameText = state.name
       bookmarks = Bookmark.getAll()
     }
     // The window is retained, so onAppear runs once; keep the command list current
@@ -121,7 +123,7 @@ struct SettingsView: View {
       return
     }
     syphonNameText = trimmed
-    state.syphonName = trimmed
+    state.name = trimmed
   }
 
   private func applyPort() {
@@ -136,7 +138,7 @@ struct SettingsView: View {
     // Persist only once the port is actually bound, so a failed Apply doesn't disable the
     // free-port fallback on the next launch
     if oscController.start(port: port, explicit: true) {
-      state.oscPort = port
+      model.oscPort = port
     }
   }
 }

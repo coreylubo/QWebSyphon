@@ -5,7 +5,7 @@ import WebKit
 
 // Output pixel dimensions the Syphon server publishes. The preview (web view + window) is sized
 // separately, in points, by dividing these by the screen's backing scale factor.
-enum OutputResolution: String, CaseIterable {
+enum OutputResolution: String, CaseIterable, Codable, Sendable {
   case hd720
   case hd1080
 
@@ -24,12 +24,9 @@ enum OutputResolution: String, CaseIterable {
   }
 }
 
-private let outputResolutionDefaultsKey = "outputResolution"
 // Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
 // explicitly saved before falling back to the next free port.
 let oscPortDefaultsKey = "oscPort"
-private let transparentBackgroundDefaultsKey = "transparentBackground"
-private let syphonNameDefaultsKey = "syphonName"
 
 // Default Syphon server name: "SyphonWeb", or "SyphonWeb <profile>" when running under a profile.
 func defaultSyphonName() -> String {
@@ -40,71 +37,76 @@ func defaultSyphonName() -> String {
 // Valid OSC listen ports (avoids the well-known/privileged range below 1024).
 let validOSCPortRange: ClosedRange<Int> = 1024...65535
 
-// @unchecked: mutated only from the main actor (SwiftUI @Published + navigate(to:) both require it)
-class WebViewState: ObservableObject, @unchecked Sendable {
-  @Published var url: URL = URL(string: "https://puppy.surf")!
+// One Syphon output: its web page, Syphon server, capture buffers and stats. Persisted settings
+// (see `config`) are saved by AppModel as one JSON value whenever one of them changes.
+@MainActor
+final class Output: ObservableObject, Identifiable {
+  let id: UUID
+
+  // Syphon server name. The server is created with this name directly (init). On later change,
+  // the server is stopped and replaced rather than renamed in place: Syphon clients (e.g. QLab)
+  // only read the name from a server's initial announce, so renaming in place leaves
+  // stale/duplicate names client-side. Old clients see the source disappear; a new source with
+  // the new name appears.
+  @Published var name: String {
+    didSet {
+      // Recreating the server makes clients drop and re-find the source; skip if unchanged
+      guard name != oldValue else { return }
+      // Synchronous, no `await` in between: captureFrame (main actor, 60Hz timer) never
+      // observes frameServer in a stopped-but-not-yet-replaced state.
+      frameServer?.stop()
+      frameServer = SyphonMetalServer(name: name, device: metalDevice)
+      onConfigChange?()
+    }
+  }
+  @Published var url: URL { didSet { onConfigChange?() } }
   @Published var loading: Bool = false
   @Published var currentUrl: URL?
   // Set on didFail/didFailProvisionalNavigation, cleared on didStartProvisionalNavigation. Shown
   // in the status bar's page-state indicator.
   @Published var loadError: String?
 
-  // Output resolution, persisted across launches. Preview (web view + window) size is derived
-  // from this and `backingScale`, not stored separately.
-  @Published var resolution: OutputResolution = {
-    if let saved = appDefaults.string(forKey: outputResolutionDefaultsKey),
-      let resolution = OutputResolution(rawValue: saved)
-    {
-      return resolution
-    }
-    return .hd720
-  }() {
-    didSet { appDefaults.set(resolution.rawValue, forKey: outputResolutionDefaultsKey) }
-  }
-
-  // Syphon server name, persisted across launches. The initial server is created with this name
-  // directly (AppDelegate). On later change, the server is stopped and replaced rather than
-  // renamed in place: Syphon clients (e.g. QLab) only read the name from a server's initial
-  // announce, so renaming in place leaves stale/duplicate names client-side. Old clients see the
-  // source disappear; a new source with the new name appears.
-  @Published var syphonName: String = {
-    let saved = appDefaults.string(forKey: syphonNameDefaultsKey)?.trimmingCharacters(
-      in: .whitespacesAndNewlines)
-    return saved?.isEmpty == false ? saved! : defaultSyphonName()
-  }() {
-    didSet {
-      // Recreating the server makes clients drop and re-find the source; skip if unchanged
-      guard syphonName != oldValue else { return }
-      appDefaults.set(syphonName, forKey: syphonNameDefaultsKey)
-      // Synchronous, no `await` in between: captureFrame (main actor, 60Hz timer) never
-      // observes frameServer in a stopped-but-not-yet-replaced state.
-      frameServer?.stop()
-      frameServer = SyphonMetalServer(name: syphonName, device: metalDevice)
-    }
-  }
-
-  // Screen's backing scale factor (1x/2x). Set once the window is actually on screen (the
-  // pre-display value is unreliable) and kept current via didChangeBackingPropertiesNotification.
-  @Published var backingScale: CGFloat = 2.0
-
-  // OSC listen port, persisted across launches. Changing this does not itself restart the OSC
-  // server; the Settings view calls OSCController.start(port:) and status reflects the result.
-  @Published var oscPort: UInt16 = {
-    let saved = appDefaults.integer(forKey: oscPortDefaultsKey)
-    return validOSCPortRange.contains(saved) ? UInt16(saved) : defaultOSCPort
-  }() {
-    didSet { appDefaults.set(Int(oscPort), forKey: oscPortDefaultsKey) }
-  }
+  // Output resolution. Preview (web view + window) size is derived from this and `backingScale`,
+  // not stored separately.
+  @Published var resolution: OutputResolution { didSet { onConfigChange?() } }
 
   // When true, the web view and Syphon output are transparent instead of opaque white. Requires
   // the page itself to set a transparent background (e.g. `body { background: transparent }`);
   // output alpha is premultiplied.
-  @Published var transparentBackground: Bool = appDefaults.bool(
-    forKey: transparentBackgroundDefaultsKey
-  ) {
-    didSet {
-      appDefaults.set(transparentBackground, forKey: transparentBackgroundDefaultsKey)
-    }
+  @Published var transparentBackground: Bool { didSet { onConfigChange?() } }
+
+  // When false, capture is skipped while the Syphon server has no clients. No UI yet.
+  @Published var captureWithoutClients: Bool { didSet { onConfigChange?() } }
+
+  // Backing scale factor (1x/2x) of the window hosting this output's web view. Set once the
+  // window is actually on screen (the pre-display value is unreliable) and kept current via
+  // didChangeBackingPropertiesNotification.
+  @Published var backingScale: CGFloat = 2.0
+
+  let stats: OutputStats
+  // Set by AppModel to persist the outputs after a config change
+  var onConfigChange: (() -> Void)?
+
+  init(config: OutputConfig) {
+    id = config.id
+    let trimmedName = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    name = trimmedName.isEmpty ? defaultSyphonName() : trimmedName
+    url = URL(string: config.url) ?? URL(string: defaultOutputURL)!
+    resolution = config.resolution
+    transparentBackground = config.transparentBackground
+    captureWithoutClients = config.captureWithoutClients
+    stats = OutputStats()
+    stats.output = self
+    // Created with the final name up front (not renamed afterwards): QLab and other clients only
+    // read the name from the initial Syphon announce, so a later rename leaves them showing stale
+    // or duplicate source names.
+    frameServer = SyphonMetalServer(name: name, device: metalDevice)
+  }
+
+  var config: OutputConfig {
+    OutputConfig(
+      id: id, name: name, url: url.absoluteString, resolution: resolution,
+      transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients)
   }
 
   // Preview size in points: output pixels / backing scale, so the web view's CSS layout width
@@ -118,7 +120,7 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   weak var webView: WKWebView?
 
   // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to `url`.
-  static func normalizedURL(_ string: String) -> URL? {
+  nonisolated static func normalizedURL(_ string: String) -> URL? {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
     // Protocol-relative ("//example.com/path"): borrow https
@@ -142,14 +144,12 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   }
 
   // Normalizes a string and navigates the web view to it
-  @MainActor
   func navigate(to urlString: String) {
-    if let urlToNavigate = WebViewState.normalizedURL(urlString) {
+    if let urlToNavigate = Output.normalizedURL(urlString) {
       url = urlToNavigate
     }
   }
 
-  @MainActor
   func reload() {
     appLog("Reloading page")
     webView?.reload()
@@ -158,22 +158,12 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   // Metal Related Objects
   var texture: MTLTexture?
   var frameServer: SyphonMetalServer?
-  var commandQueue: MTLCommandQueue?
-  var layer: CAMetalLayer?
   var graphicsContext: CGContext?
   var region: MTLRegion?
 
   // (Re)creates the texture, context and region at an exact output pixel size. Called
   // synchronously (no awaits) so a 60 Hz capture tick never sees a mismatched texture/context.
-  @MainActor
   func initMetal(pixelWidth: Int, pixelHeight: Int) {
-    commandQueue = metalDevice.makeCommandQueue()
-    layer = CAMetalLayer()
-    layer?.device = metalDevice
-    layer?.pixelFormat = .rgba8Unorm
-    layer?.maximumDrawableCount = 2
-    layer?.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
-
     let textureDescriptor: MTLTextureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
       pixelFormat: .rgba8Unorm,
       width: pixelWidth,
@@ -195,6 +185,25 @@ class WebViewState: ObservableObject, @unchecked Sendable {
     )!
 
     region = MTLRegionMake2D(0, 0, texture!.width, texture!.height)
+  }
+
+  // Captures the web view into the texture and publishes it. Called by AppModel's capture
+  // driver; skipped while the page is loading, before initMetal, and (if
+  // `captureWithoutClients` is off) while no Syphon client is connected.
+  func captureFrame(commandQueue: MTLCommandQueue) {
+    guard !loading, let webView, let texture, let graphicsContext, let region else { return }
+    if !captureWithoutClients && frameServer?.hasClients != true { return }
+    guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+    webView.getFrame(
+      context: graphicsContext, texture: texture, region: region, scale: backingScale,
+      transparent: transparentBackground)
+    frameServer?.publishFrameTexture(
+      texture, on: commandBuffer,
+      imageRegion: NSRect(x: 0, y: 0, width: texture.width, height: texture.height),
+      flipped: false)
+    commandBuffer.commit()
+    stats.frameCount += 1
   }
 }
 
@@ -222,10 +231,7 @@ extension WKWebView {
 }
 
 struct WebView: NSViewRepresentable {
-  @ObservedObject var state: WebViewState
-  // Plain reference (not @ObservedObject): WebView only writes frameCount here, it doesn't need
-  // to re-render when OutputStats' published stats change.
-  let stats: OutputStats
+  @ObservedObject var state: Output
 
   func makeNSView(context: Context) -> WKWebView {
     // Created here, not as a stored property: the struct is rebuilt on every SwiftUI render, and a
@@ -234,13 +240,7 @@ struct WebView: NSViewRepresentable {
     webView.navigationDelegate = context.coordinator
     state.webView = webView
     webView.load(URLRequest(url: state.url))
-
-    Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
-      Task { @MainActor in
-        captureFrame(webView: webView)
-      }
-    }
-
+    // Captured by AppModel's capture driver through `state.webView`
     return webView
   }
 
@@ -249,22 +249,6 @@ struct WebView: NSViewRepresentable {
     operation()
     let timeElapsed = CFAbsoluteTimeGetCurrent() - startTime
     print("Time elapsed for \(title): \(timeElapsed) s.")
-  }
-
-  func captureFrame(webView: WKWebView) {
-    if state.texture != nil && state.graphicsContext != nil && !state.loading {
-      let commandBuffer: (any MTLCommandBuffer)? = state.commandQueue?.makeCommandBuffer()
-
-      webView.getFrame(
-        context: state.graphicsContext!, texture: state.texture!, region: state.region!,
-        scale: state.backingScale, transparent: state.transparentBackground)
-      state.frameServer?.publishFrameTexture(
-        state.texture!, on: commandBuffer!,
-        imageRegion: NSRect(x: 0, y: 0, width: state.texture!.width, height: state.texture!.height),
-        flipped: false)
-      commandBuffer?.commit()
-      stats.frameCount += 1
-    }
   }
 
   func updateNSView(_ nsView: WKWebView, context: Context) {
