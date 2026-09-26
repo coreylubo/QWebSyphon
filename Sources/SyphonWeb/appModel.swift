@@ -48,6 +48,9 @@ struct OutputsLoad: Equatable {
   var shouldWrite: Bool
   // False for in-memory fallbacks, so later saves don't overwrite what's stored
   var persist: Bool
+  // Stored `outputs` is valid but `legacyOutputID`/marker are missing (a migration interrupted
+  // after writing `outputs`): the caller writes only those two, leaving `outputs` untouched
+  var shouldCompleteMarker = false
 }
 
 // Decides what to load from a profile's defaults. Reads only; writing is `loadOutputs`' job.
@@ -62,6 +65,13 @@ func migrateOutputs(
   let stored = defaults.object(forKey: outputsKey)
 
   if let configs = decodeOutputs(stored) {
+    // A single stored output with no legacy id can only be the migrated output #1: recover its id
+    // so unscoped OSC keeps working. With several outputs there is no safe guess; leave it nil.
+    if storedLegacyID == nil, configs.count == 1 {
+      return OutputsLoad(
+        configs: configs, legacyID: configs[0].id, shouldWrite: false, persist: true,
+        shouldCompleteMarker: true)
+    }
     return OutputsLoad(configs: configs, legacyID: storedLegacyID, shouldWrite: false, persist: true)
   }
 
@@ -94,6 +104,12 @@ func loadOutputs(
   write: ((String) -> Void)? = nil
 ) -> OutputsLoad {
   let load = migrateOutputs(defaults: defaults, defaultName: defaultName)
+  if load.shouldCompleteMarker, let legacyID = load.legacyID {
+    defaults.set(legacyID.uuidString, forKey: legacyOutputIDKey)
+    defaults.set(1, forKey: outputsMigrationVersionKey)
+    appLog("Completed interrupted `outputs` migration, legacy output \(legacyID)")
+    return load
+  }
   guard load.shouldWrite, let legacyID = load.legacyID else { return load }
 
   appLog("Migrating legacy settings to `outputs`: \(load.configs)")
@@ -234,17 +250,38 @@ final class AppModel: ObservableObject {
       precondition(c.name == "Default" && c.resolution == .hd720 && !c.transparentBackground)
     }
 
-    // Existing valid array, empty array, corrupt JSON: untouched, no marker
-    let existing = encodeOutputs([.makeDefault(name: "Kept")])
+    // Existing valid array, empty array, corrupt JSON: `outputs` untouched. A single stored
+    // output with no legacy id (interrupted migration) gets its id + marker completed; the
+    // others get no marker.
+    let kept = OutputConfig.makeDefault(name: "Kept")
+    let existing = encodeOutputs([kept])
     for (stored, expectCount, expectPersist) in [(existing, 1, true), ("[]", 0, true), ("{nope", 1, false)] {
       withSuite { d in
         d.set(stored, forKey: outputsKey)
         let load = loadOutputs(defaults: d, defaultName: "Default")
         precondition(!load.shouldWrite && load.configs.count == expectCount && load.persist == expectPersist)
         precondition(d.string(forKey: outputsKey) == stored)
-        precondition(d.object(forKey: outputsMigrationVersionKey) == nil)
-        if stored == existing { precondition(load.configs[0].name == "Kept") }
+        if stored == existing {
+          precondition(load.configs[0].name == "Kept" && load.legacyID == kept.id)
+          precondition(d.string(forKey: legacyOutputIDKey) == kept.id.uuidString)
+          precondition(d.integer(forKey: outputsMigrationVersionKey) == 1)
+          let again = loadOutputs(defaults: d, defaultName: "Default")
+          precondition(!again.shouldCompleteMarker && again.legacyID == kept.id)
+        } else {
+          precondition(d.object(forKey: outputsMigrationVersionKey) == nil)
+          precondition(d.object(forKey: legacyOutputIDKey) == nil)
+        }
       }
+    }
+
+    // Several stored outputs with no legacy id: no guess, nothing written
+    withSuite { d in
+      let two = encodeOutputs([.makeDefault(name: "A"), .makeDefault(name: "B")])
+      d.set(two, forKey: outputsKey)
+      let load = loadOutputs(defaults: d, defaultName: "Default")
+      precondition(load.legacyID == nil && !load.shouldCompleteMarker)
+      precondition(d.string(forKey: outputsKey) == two)
+      precondition(d.object(forKey: legacyOutputIDKey) == nil)
     }
 
     // Marker set but `outputs` gone: in-memory fallback, nothing written
