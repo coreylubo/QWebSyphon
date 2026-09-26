@@ -1,29 +1,113 @@
-# SyphonWeb
+# SyphonWebOSC
 
-This is a really basic macOS app (macOS 12.0+ and Swift 6.1.0+) that renders a web view to [Syphon](https://syphon.info) so you can use it in many live visual suites like VDMX and TouchDesigner.
+A macOS app that renders a web page to a [Syphon](https://syphon.info) source, for use in
+show-control and live visual software — QLab, VDMX, TouchDesigner, Resolume, and anything else that
+can consume Syphon.
 
-It's currently hard coded in `main.swift` to render to Syphon using the Metal API at 1280x720 and generally can send frames at at least 30 fps depending on the complexity of the webpage. 
+This is a fork of [Digit (@doawoo)'s SyphonWeb](https://github.com/doawoo/SyphonWeb), which does the
+same core job (WKWebView → Metal → Syphon) at a fixed 1280×720, one hard-coded page, controlled only
+by clicking in its own window. All credit for that foundation goes to the original author — see
+[Credits](#credits).
 
-# Developing
+## Why this fork
 
-Everything you need should be in this repo, including the pre-built Syphon framework that I converted into a `.xcframework` so you don't need to use Xcode. Along with a few hacks to make using VSCode easier with Syphon's framework.
+The original SyphonWeb is a manual, single-page tool. This fork is built for running a page (or
+several) unattended during a live show, driven from a booth:
 
-Just execute `swift run` from the command line and it should boot right up!
+- **Pages switch remotely over OSC** — no one needs to touch the SyphonWeb window during a show. See
+  [docs/OSC.md](docs/OSC.md).
+- **Pages are organized as bookmarks**, each with an optional OSC label, so a show file can address
+  them by name (`/syphon/bookmark/lower-third`) instead of a raw URL.
+- **Output can be 1080p at 60 fps**, not just 720p.
+- **The background can be transparent**, for overlays — lower thirds, toasts, scoreboards — composited
+  over other sources in your visual mixer.
+- **Several independent Syphon sources can run at once.** Today that's one process per source via
+  `--profile` (see [Multiple instances](#multiple-instances)); multiple outputs from a single process
+  is planned — see [docs/multi-output-spec.md](docs/multi-output-spec.md).
 
-I'll update this app to be a few more features in the future. Until then I hope it's a useful app!
+## Features
 
-# Building App Bundle
+- **Bookmarks**: a sidebar list of saved pages, split into Favorites and Bookmarks sections. Add or
+  edit a bookmark via a popover (name, URL, optional OSC label); right-click a bookmark for Open,
+  Edit, Favorite/Unfavorite, and Delete; double-click (or the context menu's Open) navigates the
+  output to it. A bookmark currently loaded in the output shows a globe icon and bold text.
+- **Settings window** (`Cmd-,`): output resolution (720p/1080p), OSC listen port, Syphon server name,
+  transparent background toggle, a live reference list of every OSC command (including one line per
+  labeled bookmark), and the active profile name.
+- **`Cmd-R`** reloads the current page.
+- **Status bar** below the preview: Syphon client connection state, live output fps, page load state
+  (loading / loaded / failed), and the OSC server's bound port plus the most recent OSC message
+  received and how long ago.
+- **Profiles**: run multiple isolated instances from one build, each with its own settings and Syphon
+  source (see [Multiple instances](#multiple-instances)).
 
-Because this project doesn't use Xcode, so it takes a more rough approach to creating an app bundle.
+## Requirements
 
-Basically a "skeleton" app is filled up with the framework and binary, then patched to run properly. 
+- **macOS 14 or later at runtime.** `Package.swift` declares a `.v13` deployment target, but
+  `main.swift` gates the whole app behind `#available(macOS 14, *)` — on macOS 13 it logs "You cannot
+  run this app on this version of macOS!" and never launches the UI.
+- **Swift 6.0+ toolchain** (`Package.swift` declares `swift-tools-version: 6.0`).
 
-There's a `build_app.sh` script that should do app the steps required, and produce a `SyphonWeb.app` bundle in the root of the repo.
+## OSC control
 
-# Limitations
+SyphonWeb listens for OSC messages over UDP, port 9000 by default (configurable in Settings):
 
-Videos (like YouTube) do not render in the frame output, this is because they're rendered on a difference CoreGraphics context layer that we don't have access to. But I wrote this app to render Processing.js and HTML5 animation content into my VDMX setup, so that's not a huge deal breaker for me.
+| Address | Args | Behavior |
+|---|---|---|
+| `/syphon/url` | string | Load a URL. Without a scheme, `http://` is added for `localhost`, `*.local` and IPv4 addresses, `https://` otherwise. |
+| `/syphon/bookmark` | string or int/float | Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int, or a whole-number float for senders like TouchOSC). |
+| `/syphon/bookmark/<label>` | none | Load the bookmark with this exact OSC label. |
+| `/syphon/refresh` | none | Reload the current page. |
 
-Enjoy!
+Full reference — argument types, URL normalization rules, bookmark resolution order, failure
+behavior, and worked examples (QLab, TouchOSC, raw UDP) — is in [docs/OSC.md](docs/OSC.md).
+
+## Multiple instances
+
+Run more than one SyphonWeb window (each publishing its own Syphon server) with `--profile NAME`:
+
+```
+open -n SyphonWeb.app --args --profile stage1
+swift run -c release SyphonWeb --profile stage1   # from source
+```
+
+Each profile gets its own settings (window position aside), stored separately — give each one a
+different OSC port in Settings so they don't collide. Bookmarks are stored in one shared database
+and are the same across every profile. The Syphon server name (Settings → Syphon) also defaults to
+`SyphonWeb <profile>` so each instance is identifiable in VDMX/TouchDesigner; change it there if you
+want something else.
+
+## Developing
+
+Everything you need should be in this repo, including the pre-built Syphon framework converted into
+a `.xcframework` so you don't need Xcode.
+
+Run `swift run` from the command line and it should boot right up.
+
+## Building App Bundle
+
+Because this project doesn't use Xcode, it takes a more rough approach to creating an app bundle: a
+"skeleton" app is filled up with the framework and binary, then patched to run properly.
+
+`build_app.sh` does all the steps and produces a `SyphonWeb.app` bundle in the root of the repo.
+
+## Limitations
+
+- Videos (like YouTube) do not render in the frame output — they're rendered on a different
+  CoreGraphics context layer that this app doesn't have access to.
+- If the SyphonWeb window is fully covered by another window, or the screen locks or the display
+  sleeps, WebKit stops painting and output freezes (measured in the Phase 0 spike in
+  `docs/multi-output-spec.md`). Show machines should disable screen lock and display sleep and keep
+  the window at least partly visible.
+
+## Bookmark storage
+
+Bookmarks are stored in a shared SQLite database at
+`~/Library/Application Support/syphon_web.sqlite`. Override the path (e.g. for testing) with the
+`SYPHONWEB_DB_PATH` environment variable.
+
+## Credits
+
+Forked from [SyphonWeb](https://github.com/doawoo/SyphonWeb) by Digit (@doawoo).
 
 Made with 🐾 by Digit (@doawoo)

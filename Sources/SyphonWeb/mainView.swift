@@ -3,19 +3,20 @@ import SwiftUI
 @available(macOS 14, *)
 struct MainView: View {
   @ObservedObject var state: WebViewState
+  // Plain reference: only StatusBar observes it, so the 1 s stats tick doesn't re-render MainView
+  let stats: OutputStats
+  @ObservedObject var oscController: OSCController
   @State private var bookmarks: [Bookmark] = Bookmark.getAll()
-  @State private var selectedBookmark: Bookmark?
+  @State private var selectedId: Int64?
   @State private var showAddBookmark: Bool = false
+  @State private var editingId: Int64?
 
   @State private var showDeleteConfirm: Bool = false
   @State private var bookmarkToDelete: Bookmark?
 
-  @State private var newBookmarkName: String = ""
-  @State private var newBookmarkUrl: String = ""
-
   var body: some View {
     HSplitView {
-      List(selection: $selectedBookmark) {
+      List(selection: $selectedId) {
         // Filter favs and non-faves
         let nonFavorites = bookmarks.filter { mrk in
           !mrk.favorite
@@ -40,41 +41,68 @@ struct MainView: View {
           }
         }
       }.listStyle(.sidebar)
+        .contextMenu(forSelectionType: Int64.self) { ids in
+          if let bookmark = singleBookmark(ids) {
+            Button("Open") { state.navigate(to: bookmark.url) }
+            Button("Edit…") { editingId = bookmark.id }
+            Button(bookmark.favorite ? "Unfavorite" : "Favorite") {
+              bookmark.toggleFavorite()
+              refreshBookmarks()
+            }
+            Divider()
+            Button("Delete…") {
+              bookmarkToDelete = bookmark
+              showDeleteConfirm = true
+            }
+          }
+        } primaryAction: { ids in
+          if let bookmark = singleBookmark(ids) {
+            state.navigate(to: bookmark.url)
+          }
+        }
         .safeAreaInset(edge: .bottom) {
-          VStack {
+          HStack {
             Button(action: {
               showAddBookmark = true
             }) {
               Label("Add", systemImage: "plus")
             }
+            .popover(isPresented: $showAddBookmark) {
+              BookmarkEditor(saveTitle: "Create", existing: bookmarks) { name, url, label in
+                if let error = Bookmark.addNewBookmark(name: name, url: url, label: label) {
+                  return error
+                }
+                refreshBookmarks()
+                showAddBookmark = false
+                return nil
+              } onCancel: {
+                showAddBookmark = false
+              }
+            }
+            Button(action: {
+              state.reload()
+            }) {
+              Label("Refresh", systemImage: "arrow.clockwise")
+            }
           }.padding()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .popover(isPresented: $showAddBookmark) {
-              makeAddBookmarkView()
-            }
         }.frame(width: 200, alignment: .top)
-      WebView(state: state).frame(
-        minWidth: viewWidth, maxWidth: viewWidth,
-        minHeight: viewHeight, maxHeight: viewHeight,
-      ).scaleEffect(0.90)
+      VStack(spacing: 0) {
+        WebView(state: state, stats: stats).frame(
+          width: state.previewSize.width, height: state.previewSize.height
+        )
+        StatusBar(state: state, stats: stats, oscController: oscController)
+          .frame(width: state.previewSize.width, height: statusBarHeight)
+      }
     }
+    // Other --profile instances share the bookmark database
+    .onReceive(bookmarksDidChangePublisher) { _ in refreshBookmarks() }
     .confirmationDialog("Really delete this bookmark?", isPresented: $showDeleteConfirm) {
       Button("Yes") {
         Bookmark.deleteBookmark(toDelete: bookmarkToDelete!)
+        if selectedId == bookmarkToDelete?.id { selectedId = nil }
         refreshBookmarks()
       }
-    }
-  }
-
-  func navigateTo(urlString: String) {
-    if var urlToNavigate = URL(string: urlString) {
-      if urlToNavigate.scheme == nil {
-        if let httpsURL = URL(string: "https://" + urlString) {
-          urlToNavigate = httpsURL
-        }
-      }
-
-      state.url = urlToNavigate
     }
   }
 
@@ -83,59 +111,64 @@ struct MainView: View {
     bookmarks = Bookmark.getAll()
   }
 
-  @ViewBuilder func makeAddBookmarkView() -> some View {
-    VStack {
-      LabeledContent {
-        TextField("Name", text: $newBookmarkName)
-      } label: {
-        Text("Name")
-      }
-      Spacer()
-      LabeledContent {
-        TextField("http://...", text: $newBookmarkUrl)
-      } label: {
-        Text("URL")
-      }
-      Button("Create") {
-        let newBookmark = Bookmark(
-          id: 0, url: newBookmarkUrl, name: newBookmarkName, order: 0, favorite: false)
-        Bookmark.addNewBookmark(newBookmark: newBookmark)
-        refreshBookmarks()
+  // Context menu actions only apply to a single bookmark
+  func singleBookmark(_ ids: Set<Int64>) -> Bookmark? {
+    guard ids.count == 1, let id = ids.first else { return nil }
+    return bookmarks.first { $0.id == id }
+  }
 
-        // Clear state and hide popover
-        newBookmarkName = ""
-        newBookmarkUrl = ""
-        showAddBookmark = false
-      }
-    }.frame(minWidth: 250, alignment: .leading).padding(20)
+  // Live = the bookmark's URL is what the web view was last told to load
+  func isLive(_ bookmark: Bookmark) -> Bool {
+    WebViewState.normalizedURL(bookmark.url) == state.url
   }
 
   @ViewBuilder func makeBookmark(bookmark: Bookmark) -> some View {
-    let systemImageName =
-      if bookmark.favorite {
-        "star.fill"
-      } else {
-        "star"
-      }
-
-    HStack {
-      Label("Favorite", systemImage: systemImageName).labelStyle(.iconOnly).onTapGesture {
-        bookmark.toggleFavorite()
+    BookmarkRow(bookmark: bookmark, isLive: isLive(bookmark))
+    .tag(bookmark.id)
+    .popover(
+      isPresented: Binding(
+        get: { editingId == bookmark.id },
+        set: { if !$0 { editingId = nil } })
+    ) {
+      BookmarkEditor(saveTitle: "Save", existing: bookmarks, editing: bookmark) { name, url, label in
+        if let error = bookmark.update(name: name, url: url, label: label) {
+          return error
+        }
+        editingId = nil
         refreshBookmarks()
+        return nil
+      } onCancel: {
+        editingId = nil
       }
-      Label(bookmark.name, systemImage: "link")
-
-    }.onTapGesture {
-      selectedBookmark = bookmark
-      navigateTo(urlString: bookmark.url)
     }
-    .tag(bookmark)
-    .contextMenu {
-      Button {
-        showDeleteConfirm = true
-        bookmarkToDelete = bookmark
-      } label: {
-        Label("Delete", systemImage: "trash")
+  }
+}
+
+// One sidebar row. Live bookmarks are bolded with a globe icon; the icon is white instead of blue
+// when the row is selected (background prominence increased), so it stays visible against the
+// selection highlight.
+@available(macOS 14, *)
+private struct BookmarkRow: View {
+  let bookmark: Bookmark
+  let isLive: Bool
+
+  @Environment(\.backgroundProminence) private var prominence
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Group {
+        if isLive {
+          Image(systemName: "globe")
+            .foregroundStyle(prominence == .increased ? Color.white : Color.blue)
+        }
+      }.frame(width: 16)
+      Text(bookmark.name).lineLimit(1).fontWeight(isLive ? .bold : .regular)
+      if let label = bookmark.label {
+        Spacer(minLength: 4)
+        Text("/\(label)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
       }
     }
   }

@@ -7,7 +7,8 @@ let package = Package(
         .macOS(.v13)
     ],
     dependencies: [
-        .package(url: "https://github.com/stephencelis/SQLite.swift.git", from: "0.15.4")
+        .package(url: "https://github.com/stephencelis/SQLite.swift.git", from: "0.15.4"),
+        .package(url: "https://github.com/orchetect/swift-osc", from: "3.1.0"),
     ],
     targets: [
         .binaryTarget(
@@ -16,7 +17,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "SyphonWeb",
-            dependencies: ["Syphon", .product(name: "SQLite", package: "sqlite.swift")],
+            dependencies: [
+                "Syphon", .product(name: "SQLite", package: "sqlite.swift"),
+                .product(name: "SwiftOSC", package: "swift-osc"),
+            ],
             swiftSettings: [
                 // Again. More hacks to use Syphon framework outside of the usual XCode environment. Ugh.
                 .unsafeFlags([

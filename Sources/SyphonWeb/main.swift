@@ -1,5 +1,7 @@
 import AppKit
+import Combine
 import MetalKit
+import SwiftOSC
 import SwiftUI
 import Syphon
 
@@ -8,14 +10,17 @@ var activity: NSObjectProtocol?
 activity = ProcessInfo().beginActivity(
   options: ProcessInfo.ActivityOptions.userInitiated, reason: "No Napping!")
 
-// Init metal, syphon and SQLite
-NSLog("Creating Metal device and Syphon server...")
-let viewWidth = 1280.0
-let viewHeight = 720.0
-let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
-let server: SyphonMetalServer = SyphonMetalServer.init(name: "SyphonWeb", device: metalDevice)
+#if DEBUG
+  checkBookmarkLabelValidation()
+#endif
 
-NSLog("Opening SQLite database connection...")
+// Init metal and SQLite. The Syphon server itself is created per-instance in
+// AppDelegate once the final name is known (see Bug 1: creating it here with a placeholder
+// name and renaming afterwards means QLab's initial Syphon announce carries the wrong name).
+appLog("Creating Metal device...")
+let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
+
+appLog("Opening SQLite database connection...")
 nonisolated(unsafe) let databaseConn = initDatabase()
 
 // AppKit Stuff
@@ -32,25 +37,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let mainWindow: NSWindow = NSWindow()
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
 
+  // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
+  var state: WebViewState!
+  var oscController: OSCController!
+  var outputStats: OutputStats!
+  var settingsWindow: NSWindow?
+  private var oscPortCancellable: AnyCancellable?
+
   func applicationDidFinishLaunching(_ notification: Notification) {
 
-    // Main Window
+    // Create state object (default resolution, guessed backing scale until the window is shown)
+    let state: WebViewState = WebViewState()
+    // Created with the final name up front (not renamed afterwards): QLab and other clients only
+    // read the name from the initial Syphon announce, so a later rename leaves them showing stale
+    // or duplicate source names.
+    state.frameServer = SyphonMetalServer(name: state.syphonName, device: metalDevice)
+    self.state = state
+    let outputStats = OutputStats(state: state)
+    self.outputStats = outputStats
+    self.oscController = OSCController(state: state, stats: outputStats)
+    // @Published publishes on willSet (i.e. with the incoming value, before the stored property
+    // is actually updated) — use the value the sink receives directly rather than re-reading
+    // `oscController.port` inside the closure, which would still see the old value.
+    oscPortCancellable = oscController.$port.sink { [weak self] port in
+      self?.updateWindowTitle(port: port)
+    }
+
+    // Main Window, sized from the guessed backing scale; corrected below once on screen
+    let initialPreview = state.previewSize
     let mainSize: CGSize = CGSize(
-      width: viewWidth + 200, height: viewHeight)
+      width: initialPreview.width + 200, height: initialPreview.height + statusBarHeight)
     mainWindow.setContentSize(mainSize)
     mainWindow.styleMask = [.closable, .titled]
     mainWindow.delegate = mainWindowDelegate
-    mainWindow.title = "SyphonWeb"
 
-    // Create state object and init Metal objects
-    let state: WebViewState = WebViewState()
-    state.frameServer = server
-    state.initMetal(
-      width: viewWidth / mainWindow.backingScaleFactor,
-      height: viewHeight / mainWindow.backingScaleFactor, scaleFactor: mainWindow.backingScaleFactor
-    )
-
-    let mainViewInst = MainView(state: state)
+    let mainViewInst = MainView(state: state, stats: outputStats, oscController: oscController)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
     mainView.frame = CGRect(origin: .zero, size: mainSize)
     mainView.autoresizingMask = [.height, .width]
@@ -58,14 +79,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.center()
     mainWindow.makeKeyAndOrderFront(mainWindow)
 
+    // The pre-display backing scale is unreliable; read the real value now that the window is on
+    // screen, and keep it current when the window moves between 1x/2x screens.
+    state.backingScale = mainWindow.backingScaleFactor
+    let window = mainWindow
+    NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeBackingPropertiesNotification, object: window, queue: .main
+    ) { _ in
+      Task { @MainActor in
+        state.backingScale = window.backingScaleFactor
+      }
+    }
+
     setupAppMenu()
+
+    oscController.start(port: state.oscPort)
 
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
   }
 
+  func applicationWillTerminate(_ notification: Notification) {
+    // Stop the Syphon server explicitly so clients drop the source cleanly on quit.
+    state.frameServer?.stop()
+  }
+
+  // "SyphonWeb — left · OSC 9001" (profile + actual bound port), or "SyphonWeb · OSC 9000"
+  // for the default profile. Reflects the OSC controller's actual bound port (which may differ
+  // from the configured/requested port after a fallback), not just the configured one.
+  private func updateWindowTitle(port: UInt16?) {
+    let base = profileName.map { "SyphonWeb — \($0)" } ?? "SyphonWeb"
+    guard let port else {
+      mainWindow.title = base
+      return
+    }
+    mainWindow.title = "\(base) · OSC \(port)"
+  }
+
   private func setupAppMenu() {
     let mainMenu = NSMenu()
+
     let appMenuItem = NSMenuItem()
     let appMenu = NSMenu()
 
@@ -73,6 +126,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       NSMenuItem(
         title: "About SyphonWeb", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
         keyEquivalent: ""))
+    appMenu.addItem(NSMenuItem.separator())
+
+    let settingsItem = NSMenuItem(
+      title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+    settingsItem.target = self
+    appMenu.addItem(settingsItem)
     appMenu.addItem(NSMenuItem.separator())
 
     appMenu.addItem(
@@ -83,7 +142,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     appMenuItem.submenu = appMenu
     mainMenu.addItem(appMenuItem)
 
+    let editMenuItem = NSMenuItem()
+    let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(
+      NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+    editMenu.addItem(
+      NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+    editMenu.addItem(
+      NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+    editMenu.addItem(
+      NSMenuItem(
+        title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+    editMenuItem.submenu = editMenu
+    mainMenu.addItem(editMenuItem)
+
+    let viewMenuItem = NSMenuItem()
+    let viewMenu = NSMenu(title: "View")
+    let reloadItem = NSMenuItem(
+      title: "Reload Page", action: #selector(reloadPage), keyEquivalent: "r")
+    reloadItem.target = self
+    viewMenu.addItem(reloadItem)
+    viewMenuItem.submenu = viewMenu
+    mainMenu.addItem(viewMenuItem)
+
     NSApp.mainMenu = mainMenu
+  }
+
+  @objc private func reloadPage() {
+    state.reload()
+  }
+
+  @objc private func showSettings() {
+    if let settingsWindow {
+      settingsWindow.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    let settingsViewInst = SettingsView(state: state, oscController: oscController)
+    let hostingView = NSHostingView(rootView: settingsViewInst)
+
+    let window = NSWindow(
+      contentRect: CGRect(x: 0, y: 0, width: 460, height: 520),
+      styleMask: [.closable, .titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.contentView = hostingView
+    window.isReleasedWhenClosed = false
+    window.center()
+    settingsWindow = window
+
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
   }
 }
 
@@ -96,5 +208,5 @@ if #available(macOS 14, *) {
   app.run()
 
 } else {
-  NSLog("You cannot run this app on this version of macOS!")
+  appLog("You cannot run this app on this version of macOS!")
 }
