@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftOSC
 
 let defaultOSCPort: UInt16 = 9000
@@ -56,7 +57,7 @@ func integralOSCValue(_ value: any OSCValue) -> Int? {
 // sidebar position.
 @available(macOS 14, *)
 @MainActor
-func handleBookmarkMessage(name: String?, position: Int?, state: WebViewState) {
+func handleBookmarkMessage(name: String?, position: Int?, state: Output) {
   if let name, let byLabel = Bookmark.find(label: name) {
     state.navigate(to: byLabel.url)
     return
@@ -77,7 +78,7 @@ func handleBookmarkMessage(name: String?, position: Int?, state: WebViewState) {
 // `/syphon/bookmark/<label>`: looks up the bookmark by its exact OSC label.
 @available(macOS 14, *)
 @MainActor
-func handleBookmarkLabelMessage(label: String, state: WebViewState) {
+func handleBookmarkLabelMessage(label: String, state: Output) {
   guard let bookmark = Bookmark.find(label: label) else {
     appLog("OSC: \(bookmarkAddressPrefix)\(label) no match")
     return
@@ -85,18 +86,31 @@ func handleBookmarkLabelMessage(label: String, state: WebViewState) {
   state.navigate(to: bookmark.url)
 }
 
-// Parses one incoming OSC message and hops to the main actor for anything that touches `state`.
-// Runs on the OSC server's receive queue (not the main actor), so values are extracted here as
-// plain Sendable data before crossing over.
+// Parses one incoming OSC message and hops to the main actor for anything that touches an
+// output. Runs on the OSC server's receive queue (not the main actor), so values are extracted
+// here as plain Sendable data before crossing over.
 @available(macOS 14, *)
-func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: OutputStats) {
+func dispatchOSCMessage(_ message: OSCMessage, controller: OSCController) {
   let address = message.addressPattern.stringValue
   let values = message.values
 
   // Recorded for recognized AND unrecognized addresses — this is a "did anything arrive"
   // indicator for the status bar, not a log of handled commands. Written straight from the
-  // receive thread; the status tick publishes it once per second.
-  stats.recordOSC(address: address)
+  // receive thread; the controller's 1 s tick publishes it.
+  controller.recordOSC(address: address)
+
+  // Unscoped addresses always target the legacy output (by id, never selection or position).
+  // If it's gone, log and drop rather than retarget.
+  let model = controller.model
+  func onLegacyOutput(_ body: @escaping @MainActor (Output) -> Void) {
+    Task { @MainActor in
+      guard let output = model.legacyOutput else {
+        appLog("OSC: no legacy output, ignoring \(address)")
+        return
+      }
+      body(output)
+    }
+  }
 
   switch address {
   case "/syphon/url":
@@ -104,9 +118,7 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
       appLog("OSC: /syphon/url requires a string argument, ignoring")
       return
     }
-    Task { @MainActor in
-      state.navigate(to: urlString)
-    }
+    onLegacyOutput { $0.navigate(to: urlString) }
 
   case "/syphon/bookmark":
     guard let first = values.first else {
@@ -114,28 +126,20 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
       return
     }
     if let name = first as? String {
-      Task { @MainActor in
-        handleBookmarkMessage(name: name, position: nil, state: state)
-      }
+      onLegacyOutput { handleBookmarkMessage(name: name, position: nil, state: $0) }
     } else if let position = integralOSCValue(first) {
-      Task { @MainActor in
-        handleBookmarkMessage(name: nil, position: position, state: state)
-      }
+      onLegacyOutput { handleBookmarkMessage(name: nil, position: position, state: $0) }
     } else {
       appLog("OSC: /syphon/bookmark argument must be a string or an integral number, ignoring")
     }
 
   case "/syphon/refresh":
-    Task { @MainActor in
-      state.reload()
-    }
+    onLegacyOutput { $0.reload() }
 
   default:
     if address.hasPrefix(bookmarkAddressPrefix) {
       let label = String(address.dropFirst(bookmarkAddressPrefix.count))
-      Task { @MainActor in
-        handleBookmarkLabelMessage(label: label, state: state)
-      }
+      onLegacyOutput { handleBookmarkLabelMessage(label: label, state: $0) }
     } else {
       appLog("OSC: ignoring unhandled address \(address)")
     }
@@ -145,13 +149,11 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
 // Creates and starts a server in one step so bind failures propagate to the caller instead of
 // being swallowed.
 @available(macOS 14, *)
-private func makeStartedOSCServer(
-  port: UInt16, state: WebViewState, stats: OutputStats
-) throws -> OSCUDPServer {
+private func makeStartedOSCServer(port: UInt16, controller: OSCController) throws -> OSCUDPServer {
   let server = OSCUDPServer(
     port: port,
     receiveHandler: .messages { message, _, _, _ in
-      dispatchOSCMessage(message, state: state, stats: stats)
+      dispatchOSCMessage(message, controller: controller)
     }
   )
   try server.start()
@@ -171,13 +173,37 @@ final class OSCController: ObservableObject {
   // window title can track it.
   @Published private(set) var port: UInt16?
 
-  private let state: WebViewState
-  private let stats: OutputStats
-  private var server: OSCUDPServer?
+  // Last OSC message seen (any address), for the status bar. Published at most once per second.
+  @Published private(set) var lastOSCAddress: String?
+  @Published private(set) var lastOSCDate: Date?
 
-  init(state: WebViewState, stats: OutputStats) {
-    self.state = state
-    self.stats = stats
+  let model: AppModel
+  private var server: OSCUDPServer?
+  private var activityTimer: Timer?
+
+  // Latest OSC activity, written from the OSC receive thread without hopping to the main actor
+  // (a high-rate sender would otherwise queue a main-actor task per packet).
+  private nonisolated let pendingOSC = OSAllocatedUnfairLock<(address: String, date: Date)?>(
+    initialState: nil)
+
+  nonisolated func recordOSC(address: String) {
+    pendingOSC.withLock { $0 = (address, Date()) }
+  }
+
+  init(model: AppModel) {
+    self.model = model
+    let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+      Task { @MainActor in self?.publishActivity() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    activityTimer = timer
+  }
+
+  private func publishActivity() {
+    if let osc = pendingOSC.withLock({ $0 }), osc.date != lastOSCDate {
+      lastOSCAddress = osc.address
+      lastOSCDate = osc.date
+    }
   }
 
   // Tries `port` first. If this profile has no explicitly saved `oscPort` default (a fresh
@@ -204,7 +230,7 @@ final class OSCController: ObservableObject {
     var lastError: Error?
     for candidate in candidates {
       do {
-        let newServer = try makeStartedOSCServer(port: candidate, state: state, stats: stats)
+        let newServer = try makeStartedOSCServer(port: candidate, controller: self)
         server?.stop()
         server = newServer
         self.port = candidate

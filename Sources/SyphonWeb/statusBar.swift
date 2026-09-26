@@ -7,35 +7,22 @@ import SwiftUI
 // (main.swift's initial size, webView.swift's resizeWindow) must include this.
 let statusBarHeight: CGFloat = 24
 
-// Aggregated, low-frequency stats for the status bar: output fps, Syphon client presence, and the
-// last OSC message seen. Updated at most once per second by a single Timer, so the 60 Hz capture
-// path (WebView.captureFrame) and the OSC receive path never trigger a SwiftUI re-render directly
-// — only the status bar observes this object.
+// Aggregated, low-frequency stats for one output: fps and Syphon client presence. Updated at
+// most once per second by a single Timer, so the 60 Hz capture path (Output.captureFrame) never
+// triggers a SwiftUI re-render directly — only the status bar observes this object.
 @MainActor
 final class OutputStats: ObservableObject {
   @Published private(set) var fps: Int = 0
   @Published private(set) var hasClients: Bool = false
-  @Published private(set) var lastOSCAddress: String?
-  @Published private(set) var lastOSCDate: Date?
-
-  // Latest OSC activity, written from the OSC receive thread without hopping to the main actor
-  // (a high-rate sender would otherwise queue a main-actor task per packet).
-  private nonisolated let pendingOSC = OSAllocatedUnfairLock<(address: String, date: Date)?>(
-    initialState: nil)
-
-  nonisolated func recordOSC(address: String) {
-    pendingOSC.withLock { $0 = (address, Date()) }
-  }
 
   // Plain (non-published) per-frame counter. Incremented once per published frame in
-  // WebView.captureFrame; read and reset by the 1 s tick below.
+  // Output.captureFrame; read and reset by the 1 s tick below.
   var frameCount: Int = 0
 
-  private weak var state: WebViewState?
+  weak var output: Output?
   private var timer: Timer?
 
-  init(state: WebViewState) {
-    self.state = state
+  init() {
     let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
       Task { @MainActor in self?.tick() }
     }
@@ -46,11 +33,7 @@ final class OutputStats: ObservableObject {
   private func tick() {
     fps = frameCount
     frameCount = 0
-    hasClients = state?.frameServer?.hasClients ?? false
-    if let osc = pendingOSC.withLock({ $0 }), osc.date != lastOSCDate {
-      lastOSCAddress = osc.address
-      lastOSCDate = osc.date
-    }
+    hasClients = output?.frameServer?.hasClients ?? false
   }
 }
 
@@ -63,7 +46,7 @@ private func truncated(_ text: String, limit: Int = 40) -> String {
 // state, and OSC listen status + last message. Full preview width.
 @available(macOS 14, *)
 struct StatusBar: View {
-  @ObservedObject var state: WebViewState
+  @ObservedObject var state: Output
   @ObservedObject var stats: OutputStats
   @ObservedObject var oscController: OSCController
 
@@ -92,7 +75,7 @@ struct StatusBar: View {
     }
   }
 
-  // "— fps" while loading, since capture pauses (see WebView.captureFrame); amber below 55 fps
+  // "— fps" while loading, since capture pauses (see Output.captureFrame); amber below 55 fps
   // once a page is loaded.
   private var fpsLabel: some View {
     Group {
@@ -124,7 +107,7 @@ struct StatusBar: View {
   private var oscLabel: some View {
     HStack(spacing: 4) {
       Text(oscMainText)
-      if let address = stats.lastOSCAddress, let date = stats.lastOSCDate {
+      if let address = oscController.lastOSCAddress, let date = oscController.lastOSCDate {
         Text("· \(address) \(relativeAge(date))")
           .foregroundStyle(.secondary)
       }
