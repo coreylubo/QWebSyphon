@@ -1,3 +1,4 @@
+import Combine
 import SQLite
 import SwiftUI
 
@@ -83,7 +84,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(query)
-      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+      postBookmarksDidChange()
     } catch {
       appLog("Error updating bookmark favorite: \(error)")
     }
@@ -106,7 +107,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(mrk.update(setters))
-      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+      postBookmarksDidChange()
     } catch {
       appLog("Error updating bookmark: \(error)")
       return Bookmark.describe(error)
@@ -182,7 +183,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(bookmarks.insert(setters))
-      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+      postBookmarksDidChange()
       return nil
     } catch {
       appLog("Error creating bookmark: \(error)")
@@ -205,7 +206,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(query)
-      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+      postBookmarksDidChange()
     } catch {
       appLog("Error deleting bookmark: \(error)")
     }
@@ -278,4 +279,19 @@ func validateBookmarkFields(
 extension Notification.Name {
   // Posted after any bookmark insert, update, favorite toggle or delete
   static let bookmarksDidChange = Notification.Name("SyphonWebBookmarksDidChange")
+}
+
+// Bookmarks live in one database shared by every --profile instance, so the change is announced
+// both in-process and to other SyphonWeb processes.
+func postBookmarksDidChange() {
+  NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+  DistributedNotificationCenter.default().postNotificationName(
+    .bookmarksDidChange, object: nil, userInfo: nil, deliverImmediately: true)
+}
+
+// Fires for bookmark changes made in this process or any other SyphonWeb instance
+var bookmarksDidChangePublisher: some Publisher<Notification, Never> {
+  NotificationCenter.default.publisher(for: .bookmarksDidChange)
+    .merge(with: DistributedNotificationCenter.default().publisher(for: .bookmarksDidChange))
+    .receive(on: DispatchQueue.main)
 }

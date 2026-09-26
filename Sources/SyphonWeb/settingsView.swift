@@ -108,7 +108,7 @@ struct SettingsView: View {
       bookmarks = Bookmark.getAll()
     }
     // The window is retained, so onAppear runs once; keep the command list current
-    .onReceive(NotificationCenter.default.publisher(for: .bookmarksDidChange)) { _ in
+    .onReceive(bookmarksDidChangePublisher) { _ in
       bookmarks = Bookmark.getAll()
     }
   }

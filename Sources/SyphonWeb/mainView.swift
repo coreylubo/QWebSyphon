@@ -95,6 +95,8 @@ struct MainView: View {
           .frame(width: state.previewSize.width, height: statusBarHeight)
       }
     }
+    // Other --profile instances share the bookmark database
+    .onReceive(bookmarksDidChangePublisher) { _ in refreshBookmarks() }
     .confirmationDialog("Really delete this bookmark?", isPresented: $showDeleteConfirm) {
       Button("Yes") {
         Bookmark.deleteBookmark(toDelete: bookmarkToDelete!)
