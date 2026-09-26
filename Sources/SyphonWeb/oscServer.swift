@@ -67,7 +67,7 @@ func handleBookmarkMessage(name: String?, position: Int?, state: WebViewState) {
   }
 
   guard let url = resolveBookmarkURL(name: name, position: position, in: entries) else {
-    NSLog("OSC: /syphon/bookmark no match for \(name ?? position.map(String.init) ?? "<none>")")
+    appLog("OSC: /syphon/bookmark no match for \(name ?? position.map(String.init) ?? "<none>")")
     return
   }
 
@@ -79,7 +79,7 @@ func handleBookmarkMessage(name: String?, position: Int?, state: WebViewState) {
 @MainActor
 func handleBookmarkLabelMessage(label: String, state: WebViewState) {
   guard let bookmark = Bookmark.find(label: label) else {
-    NSLog("OSC: \(bookmarkAddressPrefix)\(label) no match")
+    appLog("OSC: \(bookmarkAddressPrefix)\(label) no match")
     return
   }
   state.navigate(to: bookmark.url)
@@ -101,7 +101,7 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
   switch address {
   case "/syphon/url":
     guard let urlString = values.first as? String else {
-      NSLog("OSC: /syphon/url requires a string argument, ignoring")
+      appLog("OSC: /syphon/url requires a string argument, ignoring")
       return
     }
     Task { @MainActor in
@@ -110,7 +110,7 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
 
   case "/syphon/bookmark":
     guard let first = values.first else {
-      NSLog("OSC: /syphon/bookmark requires an argument, ignoring")
+      appLog("OSC: /syphon/bookmark requires an argument, ignoring")
       return
     }
     if let name = first as? String {
@@ -122,7 +122,7 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
         handleBookmarkMessage(name: nil, position: position, state: state)
       }
     } else {
-      NSLog("OSC: /syphon/bookmark argument must be a string or an integral number, ignoring")
+      appLog("OSC: /syphon/bookmark argument must be a string or an integral number, ignoring")
     }
 
   case "/syphon/refresh":
@@ -137,7 +137,7 @@ func dispatchOSCMessage(_ message: OSCMessage, state: WebViewState, stats: Outpu
         handleBookmarkLabelMessage(label: label, state: state)
       }
     } else {
-      NSLog("OSC: ignoring unhandled address \(address)")
+      appLog("OSC: ignoring unhandled address \(address)")
     }
   }
 }
@@ -212,14 +212,14 @@ final class OSCController: ObservableObject {
           candidate == port
           ? "Listening on UDP \(candidate)"
           : "Listening on UDP \(candidate) (port \(port) was in use)"
-        NSLog("OSC server listening on UDP port \(candidate)")
+        appLog("OSC server listening on UDP port \(candidate)")
         return candidate == port
       } catch {
         lastError = error
       }
     }
     status = "Failed to bind UDP \(port): \(lastError!)"
-    NSLog("OSC server failed to start on UDP port \(port): \(lastError!)")
+    appLog("OSC server failed to start on UDP port \(port): \(lastError!)")
     return false
   }
 }

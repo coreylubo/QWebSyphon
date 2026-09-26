@@ -13,7 +13,7 @@ func getDbPath() -> String {
     appSupportUrl!.append(component: "syphon_web.sqlite")
     return appSupportUrl!.path(percentEncoded: false)
   } else {
-    NSLog("Oops! Could not determine the application support directly, using temporary storage!!!")
+    appLog("Oops! Could not determine the application support directly, using temporary storage!!!")
     return "/tmp/syphon_web.sqlite"
   }
 }
@@ -41,7 +41,7 @@ func createBookmarkTable(db: Connection) {
   let label = SQLite.Expression<String?>("label")
 
   do {
-    NSLog("Creating `bookmarks` table if not already present...")
+    appLog("Creating `bookmarks` table if not already present...")
     try db.run(
       bookmarkTable.create(ifNotExists: true) { table in
         table.column(id, primaryKey: .autoincrement)
@@ -52,7 +52,7 @@ func createBookmarkTable(db: Connection) {
         table.column(label)
       })
   } catch {
-    NSLog("createBookmarkTable() Error: \(error)")
+    appLog("createBookmarkTable() Error: \(error)")
   }
 }
 
@@ -61,7 +61,7 @@ func initDatabase() -> Connection? {
   do {
     let dbPath = getDbPath()
 
-    NSLog("Opening SQLite DB at path \(dbPath)")
+    appLog("Opening SQLite DB at path \(dbPath)")
 
     let db: Connection = try Connection(dbPath)
     db.busyTimeout = 5
@@ -70,7 +70,7 @@ func initDatabase() -> Connection? {
 
     return db
   } catch {
-    NSLog("initDatabase() Error: \(error)")
+    appLog("initDatabase() Error: \(error)")
     return nil
   }
 }
@@ -92,9 +92,9 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
 
   do {
     if try !hasLabelColumn() {
-      NSLog("`bookmarks` has no `label` column, backing up before migrating...")
+      appLog("`bookmarks` has no `label` column, backing up before migrating...")
       guard backupDatabase(db: db, dbPath: dbPath) else {
-        NSLog("Backup failed, skipping `label` migration. Bookmark labels are disabled.")
+        appLog("Backup failed, skipping `label` migration. Bookmark labels are disabled.")
         return
       }
       // Two instances can both reach here on first launch; the transaction serializes them, and
@@ -102,9 +102,9 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
       try db.transaction(.immediate) {
         if try !hasLabelColumn() {
           try db.run(bookmarkTable.addColumn(label))
-          NSLog("Added `label` column to `bookmarks`")
+          appLog("Added `label` column to `bookmarks`")
         } else {
-          NSLog("`label` column already present (added by another instance), skipping ALTER")
+          appLog("`label` column already present (added by another instance), skipping ALTER")
         }
       }
     }
@@ -112,10 +112,10 @@ func migrateBookmarkLabels(db: Connection, dbPath: String) {
     try db.run(
       "CREATE UNIQUE INDEX IF NOT EXISTS bookmarks_label_unique ON bookmarks(label COLLATE NOCASE) WHERE label IS NOT NULL"
     )
-    NSLog("Ensured unique index `bookmarks_label_unique`")
+    appLog("Ensured unique index `bookmarks_label_unique`")
     bookmarkLabelsEnabled = true
   } catch {
-    NSLog("migrateBookmarkLabels() Error: \(error). Bookmark labels are disabled.")
+    appLog("migrateBookmarkLabels() Error: \(error). Bookmark labels are disabled.")
   }
 }
 
@@ -131,10 +131,10 @@ func backupDatabase(db: Connection, dbPath: String) -> Bool {
   do {
     // VACUUM INTO writes a consistent snapshot even if another instance is writing
     try db.run("VACUUM INTO ?", backupPath)
-    NSLog("Backed up SQLite DB to \(backupPath)")
+    appLog("Backed up SQLite DB to \(backupPath)")
     return true
   } catch {
-    NSLog("backupDatabase() Error: \(error)")
+    appLog("backupDatabase() Error: \(error)")
     return false
   }
 }

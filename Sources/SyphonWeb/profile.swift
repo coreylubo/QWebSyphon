@@ -18,7 +18,7 @@ private func parseProfileName() -> String? {
 let profileName: String? = {
   guard let candidate = parseProfileName() else { return nil }
   guard !candidate.isEmpty, candidate.allSatisfy(profileNameAllowedChars.contains) else {
-    NSLog("Ignoring invalid --profile \"\(candidate)\" (must match ^[A-Za-z0-9_-]+$)")
+    appLog("Ignoring invalid --profile \"\(candidate)\" (must match ^[A-Za-z0-9_-]+$)")
     return nil
   }
   return candidate
@@ -29,8 +29,15 @@ let profileName: String? = {
 nonisolated(unsafe) let appDefaults: UserDefaults = {
   guard let profileName else { return .standard }
   guard let suite = UserDefaults(suiteName: "SyphonWeb.profile.\(profileName)") else {
-    NSLog("Could not open UserDefaults suite for profile \"\(profileName)\", using standard")
+    appLog("Could not open UserDefaults suite for profile \"\(profileName)\", using standard")
     return .standard
   }
   return suite
 }()
+
+// NSLog treats its first argument as a format string, so interpolated URLs or OSC addresses
+// containing "%" would be read as format specifiers (garbled output or a crash). Always log
+// through "%@".
+func appLog(_ message: String) {
+  NSLog("%@", message)
+}

@@ -37,7 +37,7 @@ class Bookmark: Identifiable, Hashable {
       try self.order = fromRowElement.get(order)
       try self.favorite = fromRowElement.get(favorite)
     } catch {
-      NSLog("Error create bookmark object from DB!")
+      appLog("Error create bookmark object from DB!")
       self.id = -1
       self.url = "about:blank"
       self.name = "<Invalid>"
@@ -85,7 +85,7 @@ class Bookmark: Identifiable, Hashable {
       try databaseConn!.run(query)
       NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
-      NSLog("Error updating bookmark favorite: \(error)")
+      appLog("Error updating bookmark favorite: \(error)")
     }
   }
 
@@ -108,7 +108,7 @@ class Bookmark: Identifiable, Hashable {
       try databaseConn!.run(mrk.update(setters))
       NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
-      NSLog("Error updating bookmark: \(error)")
+      appLog("Error updating bookmark: \(error)")
       return Bookmark.describe(error)
     }
 
@@ -132,7 +132,7 @@ class Bookmark: Identifiable, Hashable {
 
       return bookmarksFound!
     } catch {
-      NSLog("Error fetching bookmarks from database: \(error)")
+      appLog("Error fetching bookmarks from database: \(error)")
       return []
     }
   }
@@ -154,7 +154,7 @@ class Bookmark: Identifiable, Hashable {
       return nil
 
     } catch {
-      NSLog("Error fetching bookmark from database: \(error)")
+      appLog("Error fetching bookmark from database: \(error)")
       return nil
     }
   }
@@ -185,7 +185,7 @@ class Bookmark: Identifiable, Hashable {
       NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
       return nil
     } catch {
-      NSLog("Error creating bookmark: \(error)")
+      appLog("Error creating bookmark: \(error)")
       return describe(error)
     }
   }
@@ -207,7 +207,7 @@ class Bookmark: Identifiable, Hashable {
       try databaseConn!.run(query)
       NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
-      NSLog("Error deleting bookmark: \(error)")
+      appLog("Error deleting bookmark: \(error)")
     }
   }
 }
@@ -271,7 +271,7 @@ func validateBookmarkFields(
     precondition(
       validateBookmarkFields(name: "n", url: "", label: "", existing: [], excludingId: nil).error
         != nil)
-    NSLog("Bookmark label validation self-check passed")
+    appLog("Bookmark label validation self-check passed")
   }
 #endif
 

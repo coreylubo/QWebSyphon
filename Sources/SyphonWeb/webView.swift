@@ -151,7 +151,7 @@ class WebViewState: ObservableObject, @unchecked Sendable {
 
   @MainActor
   func reload() {
-    NSLog("Reloading page")
+    appLog("Reloading page")
     webView?.reload()
   }
 
@@ -333,12 +333,12 @@ struct WebView: NSViewRepresentable {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
       parent.state.loading = true
       parent.state.loadError = nil
-      NSLog("Loading URL: \(parent.state.url)")
+      appLog("Loading URL: \(parent.state.url)")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
       parent.state.loading = webView.isLoading
-      NSLog("Done loading URL: \(parent.state.url)")
+      appLog("Done loading URL: \(parent.state.url)")
     }
 
     func webView(
@@ -346,7 +346,7 @@ struct WebView: NSViewRepresentable {
     ) {
       parent.state.loading = webView.isLoading
       parent.state.loadError = error.localizedDescription
-      NSLog("Failed loading URL: \(parent.state.url) error: \(error)")
+      appLog("Failed loading URL: \(parent.state.url) error: \(error)")
     }
 
     func webView(
@@ -355,7 +355,7 @@ struct WebView: NSViewRepresentable {
     ) {
       parent.state.loading = webView.isLoading
       parent.state.loadError = error.localizedDescription
-      NSLog("Failed provisional loading URL: \(parent.state.url) error: \(error)")
+      appLog("Failed provisional loading URL: \(parent.state.url) error: \(error)")
     }
   }
 }

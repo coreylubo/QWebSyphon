@@ -17,10 +17,10 @@ activity = ProcessInfo().beginActivity(
 // Init metal and SQLite. The Syphon server itself is created per-instance in
 // AppDelegate once the final name is known (see Bug 1: creating it here with a placeholder
 // name and renaming afterwards means QLab's initial Syphon announce carries the wrong name).
-NSLog("Creating Metal device...")
+appLog("Creating Metal device...")
 let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
 
-NSLog("Opening SQLite database connection...")
+appLog("Opening SQLite database connection...")
 nonisolated(unsafe) let databaseConn = initDatabase()
 
 // AppKit Stuff
@@ -208,5 +208,5 @@ if #available(macOS 14, *) {
   app.run()
 
 } else {
-  NSLog("You cannot run this app on this version of macOS!")
+  appLog("You cannot run this app on this version of macOS!")
 }
