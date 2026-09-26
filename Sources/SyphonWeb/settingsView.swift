@@ -1,24 +1,10 @@
+import Combine
 import SwiftUI
 
-// One documented OSC address for the "OSC Commands" reference list.
-// Named distinctly from oscServer.swift's (exported) `OSCCommandInfo` to avoid a duplicate-symbol
-// clash; cluster 3 is expected to drop this in favor of `oscCommandReference(outputs:)`.
-private struct LegacyOSCCommandInfo: Identifiable {
-  let id: String
-  let args: String
-  let description: String
-}
-
-private let oscCommands: [LegacyOSCCommandInfo] = [
-  LegacyOSCCommandInfo(id: "/syphon/url", args: "string", description: "Load a URL (https:// added if no scheme is given)."),
-  LegacyOSCCommandInfo(
-    id: "/syphon/bookmark", args: "string or int",
-    description: "Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int/float)."
-  ),
-  LegacyOSCCommandInfo(id: "/syphon/bookmark/<label>", args: "none", description: "Load the bookmark with this OSC label."),
-  LegacyOSCCommandInfo(id: "/syphon/refresh", args: "none", description: "Reload the current page."),
-]
-
+// Global settings only (phase 3, cluster 3): instances, OSC port, and the full OSC command
+// reference (from `oscCommandReference(outputs:)`, cluster 2/oscServer.swift) plus per-bookmark
+// label entries. Per-output settings (name, resolution, appearance) live in each tile's
+// `OutputSettingsPopover` (outputTiles.swift) instead.
 @available(macOS 14, *)
 struct SettingsView: View {
   @ObservedObject var model: AppModel
@@ -27,12 +13,10 @@ struct SettingsView: View {
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
+  @State private var oscCommands: [OSCCommandInfo] = []
 
   var body: some View {
     Form {
-      OutputSettingsSections(model: model, output: model.selectedOutput)
-        .id(model.selectedOutputID)
-
       Section("Instances") {
         Text("Profile: \(profileName ?? "default")")
         Text(
@@ -80,10 +64,21 @@ struct SettingsView: View {
     .onAppear {
       portText = String(model.oscPort)
       bookmarks = Bookmark.getAll()
+      oscCommands = oscCommandReference(outputs: model.outputs)
     }
     // The window is retained, so onAppear runs once; keep the command list current
     .onReceive(bookmarksDidChangePublisher) { _ in
       bookmarks = Bookmark.getAll()
+    }
+    // Outputs added/removed/renamed while Settings is open (name feeds the per-output example
+    // rows and the grandfathered-name index fallback): re-render via `model` (add/remove) and
+    // resubscribe to each current output's `$name`. `.receive(on:)` defers past `@Published`'s
+    // willSet-time emission so the read below sees the NEW name, not the old one.
+    .onReceive(
+      Publishers.MergeMany(model.outputs.map { $0.$name.map { _ in () }.eraseToAnyPublisher() })
+        .receive(on: DispatchQueue.main)
+    ) { _ in
+      oscCommands = oscCommandReference(outputs: model.outputs)
     }
   }
 
@@ -101,128 +96,5 @@ struct SettingsView: View {
     if oscController.start(port: port, explicit: true) {
       model.oscPort = port
     }
-  }
-}
-
-// Which resolution choice the picker shows. `.custom` maps to `output.customSize != nil`; the two
-// presets map to `output.resolution` when there's no custom size.
-private enum ResolutionChoice: Hashable {
-  case preset(OutputResolution)
-  case custom
-}
-
-// Output/Syphon/Appearance settings for one output. Re-created (via `.id(model.selectedOutputID)`
-// in SettingsView) whenever the selection changes, so every `@State` draft here (name text, W/H
-// text, errors) starts fresh for the newly selected output rather than leaking the old one's.
-@available(macOS 14, *)
-private struct OutputSettingsSections: View {
-  let model: AppModel
-  @ObservedObject var output: Output
-
-  @State private var resolutionChoice: ResolutionChoice
-  @State private var widthText: String
-  @State private var heightText: String
-  @State private var sizeError: String?
-  @State private var syphonNameText: String
-  @State private var syphonNameError: String?
-
-  init(model: AppModel, output: Output) {
-    self.model = model
-    self.output = output
-    _resolutionChoice = State(
-      initialValue: output.customSize == nil ? .preset(output.resolution) : .custom)
-    let size = output.pixelSize
-    _widthText = State(initialValue: String(Int(size.width)))
-    _heightText = State(initialValue: String(Int(size.height)))
-    _syphonNameText = State(initialValue: output.name)
-  }
-
-  var body: some View {
-    Section("Output") {
-      Text("Editing \u{201c}\(output.name)\u{201d}")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-      Picker("Resolution", selection: $resolutionChoice) {
-        ForEach(OutputResolution.allCases, id: \.self) { resolution in
-          Text(resolution.label).tag(ResolutionChoice.preset(resolution))
-        }
-        Text("Custom").tag(ResolutionChoice.custom)
-      }
-      .onChange(of: resolutionChoice) { _, choice in
-        if case .preset(let resolution) = choice {
-          sizeError = nil
-          output.resolution = resolution
-          output.customSize = nil
-        }
-      }
-
-      if resolutionChoice == .custom {
-        HStack {
-          TextField("Width", text: $widthText).frame(width: 80)
-          Text("×")
-          TextField("Height", text: $heightText).frame(width: 80)
-          Button("Apply", action: applyCustomSize)
-        }
-        if let sizeError {
-          Text(sizeError).font(.caption).foregroundStyle(.red)
-        }
-      }
-    }
-
-    Section("Syphon") {
-      HStack {
-        TextField("Syphon name", text: $syphonNameText)
-          .onSubmit(applySyphonName)
-        Button("Apply", action: applySyphonName)
-      }
-      if let syphonNameError {
-        Text(syphonNameError).font(.caption).foregroundStyle(.red)
-      }
-    }
-
-    Section("Appearance") {
-      Toggle("Transparent background", isOn: $output.transparentBackground)
-      Text(
-        "The page must set a transparent background (e.g. body { background: transparent }). Output alpha is premultiplied."
-      )
-      .font(.caption)
-      .foregroundStyle(.secondary)
-
-      Toggle("Capture without clients", isOn: $output.captureWithoutClients)
-      Text(
-        "Keeps publishing frames while no Syphon client is connected. Turn off to save CPU."
-      )
-      .font(.caption)
-      .foregroundStyle(.secondary)
-    }
-  }
-
-  private func applyCustomSize() {
-    sizeError = nil
-    guard let width = Int(widthText.trimmingCharacters(in: .whitespacesAndNewlines)),
-      let height = Int(heightText.trimmingCharacters(in: .whitespacesAndNewlines)),
-      let size = PixelSize(width: width, height: height)
-    else {
-      sizeError =
-        "Width must be \(PixelSize.widthRange.lowerBound)–\(PixelSize.widthRange.upperBound), "
-        + "height \(PixelSize.heightRange.lowerBound)–\(PixelSize.heightRange.upperBound)"
-      return
-    }
-    output.setCustomSize(size)
-  }
-
-  private func applySyphonName() {
-    syphonNameError = nil
-    let trimmed = syphonNameText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      syphonNameError = "Syphon name can't be empty"
-      return
-    }
-    if let error = model.renameOutput(output.id, to: trimmed) {
-      syphonNameError = error
-      return
-    }
-    syphonNameText = trimmed
   }
 }
