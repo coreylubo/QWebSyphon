@@ -107,6 +107,10 @@ struct SettingsView: View {
       syphonNameText = state.syphonName
       bookmarks = Bookmark.getAll()
     }
+    // The window is retained, so onAppear runs once; keep the command list current
+    .onReceive(NotificationCenter.default.publisher(for: .bookmarksDidChange)) { _ in
+      bookmarks = Bookmark.getAll()
+    }
   }
 
   private func applySyphonName() {

@@ -83,6 +83,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(query)
+      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
       NSLog("Error updating bookmark favorite: \(error)")
     }
@@ -105,6 +106,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(mrk.update(setters))
+      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
       NSLog("Error updating bookmark: \(error)")
       return Bookmark.describe(error)
@@ -180,6 +182,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(bookmarks.insert(setters))
+      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
       return nil
     } catch {
       NSLog("Error creating bookmark: \(error)")
@@ -202,6 +205,7 @@ class Bookmark: Identifiable, Hashable {
 
     do {
       try databaseConn!.run(query)
+      NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
     } catch {
       NSLog("Error deleting bookmark: \(error)")
     }
@@ -270,3 +274,8 @@ func validateBookmarkFields(
     NSLog("Bookmark label validation self-check passed")
   }
 #endif
+
+extension Notification.Name {
+  // Posted after any bookmark insert, update, favorite toggle or delete
+  static let bookmarksDidChange = Notification.Name("SyphonWebBookmarksDidChange")
+}

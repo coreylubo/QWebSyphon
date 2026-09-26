@@ -73,6 +73,8 @@ class WebViewState: ObservableObject, @unchecked Sendable {
     return saved?.isEmpty == false ? saved! : defaultSyphonName()
   }() {
     didSet {
+      // Recreating the server makes clients drop and re-find the source; skip if unchanged
+      guard syphonName != oldValue else { return }
       appDefaults.set(syphonName, forKey: syphonNameDefaultsKey)
       // Synchronous, no `await` in between: captureFrame (main actor, 60Hz timer) never
       // observes frameServer in a stopped-but-not-yet-replaced state.
@@ -119,6 +121,8 @@ class WebViewState: ObservableObject, @unchecked Sendable {
   static func normalizedURL(_ string: String) -> URL? {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
+    // Protocol-relative ("//example.com/path"): borrow https
+    if trimmed.hasPrefix("//") { return URL(string: "https:" + trimmed) }
     // Only strings starting with "<scheme>://" or a known scheme-only form keep their scheme. "localhost:3000"
     // would otherwise parse with scheme "localhost", and "127.0.0.1:3000" not at all.
     let lower = trimmed.lowercased()
