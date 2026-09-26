@@ -367,7 +367,9 @@ final class AppModel: ObservableObject {
   func addOutput() -> Output? {
     guard outputs.count < maxOutputs else { return nil }
     let name = uniqueOutputName(
-      base: defaultOutputBaseName(), existing: outputs.map(\.name) + reservedOutputNames)
+      // Prefix leaves room for a "-N" suffix within the 64-character name limit
+      base: String(defaultOutputBaseName().prefix(60)),
+      existing: outputs.map(\.name) + reservedOutputNames)
     let output = Output(config: .makeDefault(name: name))
     output.onConfigChange = { [weak self] in self?.saveOutputs() }
     outputs.append(output)
@@ -386,7 +388,9 @@ final class AppModel: ObservableObject {
     config.id = UUID()
     config.bookmarkID = nil
     config.name = uniqueOutputName(
-      base: "\(source.name)-copy", existing: outputs.map(\.name) + reservedOutputNames)
+      // Slugged (a grandfathered source name may have spaces) and trimmed so "-copy-N" fits in 64
+      base: "\(slugForOutputName(source.name).prefix(54))-copy",
+      existing: outputs.map(\.name) + reservedOutputNames)
     let output = Output(config: config)
     output.onConfigChange = { [weak self] in self?.saveOutputs() }
     outputs.append(output)

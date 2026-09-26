@@ -85,6 +85,8 @@ struct MainView: View {
     // Other --profile instances share the bookmark database
     .onReceive(bookmarksDidChangePublisher) { _ in refreshBookmarks() }
     .onReceive(outputChangePublisher) { updateLiveMap() }
+    // Outputs restored with a persisted bookmarkID are live before anything changes
+    .onAppear { updateLiveMap() }
     .confirmationDialog("Really delete this bookmark?", isPresented: $showDeleteConfirm) {
       Button("Yes") {
         Bookmark.deleteBookmark(toDelete: bookmarkToDelete!)
