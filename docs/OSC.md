@@ -1,7 +1,8 @@
 # OSC control reference
 
 Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
-`Sources/SyphonWeb/bookmark.swift`, `Sources/SyphonWeb/settingsView.swift`.
+`Sources/SyphonWeb/appModel.swift`, `Sources/SyphonWeb/bookmark.swift`,
+`Sources/SyphonWeb/settingsView.swift`.
 
 ## Transport
 
@@ -37,10 +38,41 @@ Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
   (`OSCPacketDispatcherProtocol.dispatch`), an incoming `.bundle` is recursively walked and every
   contained message is dispatched to the handler separately — SyphonWeb's dispatch code only ever
   sees single `OSCMessage` values, never a bundle.
-- **No OSC wildcard/pattern matching.** `dispatchOSCMessage` matches `message.addressPattern
-  .stringValue` with a plain Swift `switch` on exact strings, plus one `hasPrefix` check for the
-  bookmark-label route. Senders using OSC's `*`/`?`/`[]` address-pattern syntax will not match
+- **No OSC wildcard/pattern matching.** `dispatchOSCMessage` parses `message.addressPattern
+  .stringValue` with `parseOSCRoute`, an exact-segment parser (see "Addressing an output" below),
+  not OSC's `*`/`?`/`[]` address-pattern syntax — senders using that syntax will not match
   anything.
+
+## Addressing an output
+
+One process, one OSC port, any number of outputs. Every command has two forms:
+
+- **Legacy (unscoped)** — `/syphon/url`, `/syphon/bookmark`, `/syphon/bookmark/<label>`,
+  `/syphon/refresh` — always targets the **legacy output** (the one created by the one-output→
+  multi-output migration, tracked by a fixed id, never by selection or array position). If the
+  legacy output has been removed, these are logged ("`no output for /syphon/url, ignoring`") and
+  dropped rather than silently retargeted to another output.
+- **Scoped** — `/syphon/<output>/url`, `/syphon/<output>/bookmark`,
+  `/syphon/<output>/bookmark/<label>`, `/syphon/<output>/refresh` — targets `<output>`, resolved
+  (`resolveOutput`) as:
+  1. **All-digit** → a 1-based index into the current output list (`1` = first output). `0`,
+     negative, or past the last output is logged and dropped.
+  2. **Otherwise** → a case-insensitive match against an output's name — but only names that pass
+     the OSC slug rule (letters, digits, `-`, `_`, non-empty, ≤64 chars, not all-digits — the same
+     rule new output names are validated against). An older hand-edited name that predates the
+     rule (e.g. one with a space) is "grandfathered": it still works everywhere else, but over OSC
+     it's reachable only by index, never by typing its name. No match at all is logged and
+     dropped.
+
+`parseOSCRoute` parses the address by splitting on `/` and requiring exact segment counts — a
+missing leading `/`, an empty segment anywhere (`/syphon//url`), a trailing `/`, or extra segments
+all fail to parse and are logged as unhandled. `["syphon", "bookmark", x]` is always the *legacy*
+bookmark-label form, never a scoped address for an output literally named "bookmark" — `bookmark`
+(along with `url` and `refresh`) is a reserved word that can never be assigned as an output name.
+
+Settings' "OSC Commands" reference list (`oscCommandReference(outputs:)`) renders the legacy and
+scoped forms above plus one concrete example address per current output, so a show file can be
+built by reading that list rather than this doc.
 
 ## Commands
 
@@ -48,10 +80,11 @@ Every message — recognized or not — is recorded via `controller.recordOSC(ad
 dispatch logic runs, so the status bar's "last OSC message" always reflects the most recent packet
 received, whether or not SyphonWeb understood it.
 
-### `/syphon/url <string>`
+### `/syphon/url <string>` · `/syphon/<output>/url <string>`
 
-Loads a URL. The first argument must be a string (`values.first as? String`; extra arguments are
-ignored); any other type is logged ("`/syphon/url requires a string argument, ignoring`") and dropped.
+Loads a URL in the target output. The first argument must be a string (`values.first as?
+String`; extra arguments are ignored); any other type is logged ("`<address> requires a string
+argument, ignoring`") and dropped.
 
 The string is normalized by `Output.normalizedURL` before navigating:
 
@@ -65,7 +98,7 @@ The string is normalized by `Output.normalizedURL` before navigating:
   everything else. This is why `localhost:3000` and `192.168.1.5:8080` get `http://` while
   `example.com` gets `https://`.
 
-### `/syphon/bookmark <string|int|float>`
+### `/syphon/bookmark <string|int|float>` · `/syphon/<output>/bookmark <string|int|float>`
 
 Uses the first argument (extra arguments are ignored). It must be a string or an integral number
 (see below); anything else is logged and ignored.
@@ -86,20 +119,24 @@ then `Bookmarks` section, matching what's on screen. Index 0, negative, or past 
 `2.0` resolves to position 2, `2.5` is rejected. This covers senders like TouchOSC that only send
 floats.
 
-### `/syphon/bookmark/<label>`
+### `/syphon/bookmark/<label>` · `/syphon/<output>/bookmark/<label>`
 
 Loads the bookmark whose OSC label exactly matches `<label>` (case-insensitive,
-`Bookmark.find(label:)`). No match: logged and ignored.
+`Bookmark.find(label:)`), in the target output. No match: logged and ignored.
 
-**This route currently prefix-matches, not exact-segment-matches**: the handler does
-`address.hasPrefix("/syphon/bookmark/")` and takes *everything after that prefix* as the label,
-including any further `/` characters. `/syphon/bookmark/foo/bar` looks up the label `"foo/bar"`, not
-an error. (The planned multi-output work tightens this to strict segment parsing — see
-`docs/multi-output-spec.md`.)
+**Strict segment matching, not a prefix match**: `parseOSCRoute` splits the address into exactly
+three (legacy) or four (scoped) non-empty segments, so `<label>` can't itself contain `/` —
+`/syphon/bookmark/foo/bar` doesn't parse (four segments where the legacy bookmark-label form takes
+three) and is logged as unhandled, rather than looking up a label `"foo/bar"`. A trailing `/`
+(`/syphon/bookmark/foo/`) fails the same way — it produces an empty final segment.
 
-### `/syphon/refresh`
+Note the ambiguity rule: `/syphon/bookmark/<x>` is *always* the legacy label form, never a scoped
+address for an output named "bookmark" — `bookmark` is a reserved output name (along with `url`
+and `refresh`), so no output can ever collide with it.
 
-Reloads the current page (`webView?.reload()`). No arguments used.
+### `/syphon/refresh` · `/syphon/<output>/refresh`
+
+Reloads the current page in the target output (`webView?.reload()`). No arguments used.
 
 ## Bookmark labels
 
@@ -116,11 +153,14 @@ A bookmark's label (when set) also appears as its own row in Settings → OSC Co
 ## Threading and implementation notes
 
 - Incoming packets are decoded and dispatched to `dispatchOSCMessage` on the OSC server's own
-  receive queue, **not** the main actor.
+  receive queue, **not** the main actor. `parseOSCRoute` (address → route) and `resolveOutput`
+  (an `<output>` segment → an id, given a plain `[(id, name)]` snapshot) are pure functions with
+  no actor affinity, so they're usable from either side and unit-testable without a database or
+  Metal.
 - `dispatchOSCMessage` extracts the address and argument values as plain (`Sendable`) data on that
   thread, then wraps the actual state mutation (`state.navigate`, `state.reload`, bookmark lookups)
-  in `Task { @MainActor in ... }` to hop onto the main actor, since `Output` and `Bookmark`
-  require it.
+  — including resolving *which* output a scoped address means, since that reads live
+  `AppModel.outputs`/`legacyOutput` — in `Task { @MainActor in ... }` to hop onto the main actor.
 - The "last OSC message" indicator is written from the receive thread through an
   `OSAllocatedUnfairLock`-protected value (`OSCController.recordOSC`), not by hopping to the main
   actor per packet — the OSC controller's 1-second tick reads and publishes it, so a
@@ -146,6 +186,20 @@ Map a button to send a float value to `/syphon/bookmark` at `127.0.0.1:9000`. A 
 `2.0` on press loads the bookmark at sidebar position 2 (favorites first). Values with a fractional
 part (e.g. `2.5`) are rejected — most TouchOSC controls send whole-number floats for this kind of
 mapping already.
+
+### Targeting one output among several
+
+Given outputs named "Main" and "Overlay" (in that order), any of these load a URL in "Overlay"
+without touching "Main":
+
+```
+/syphon/Overlay/url "https://example.com/lower-third"
+/syphon/overlay/url "https://example.com/lower-third"   (case-insensitive)
+/syphon/2/url "https://example.com/lower-third"          (1-based index)
+```
+
+`/syphon/url` (no output segment) always targets the legacy output regardless of how many outputs
+now exist or which one is selected in the UI.
 
 ### Raw UDP from Python (no dependencies)
 

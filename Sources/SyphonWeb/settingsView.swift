@@ -1,20 +1,22 @@
 import SwiftUI
 
 // One documented OSC address for the "OSC Commands" reference list.
-private struct OSCCommandInfo: Identifiable {
+// Named distinctly from oscServer.swift's (exported) `OSCCommandInfo` to avoid a duplicate-symbol
+// clash; cluster 3 is expected to drop this in favor of `oscCommandReference(outputs:)`.
+private struct LegacyOSCCommandInfo: Identifiable {
   let id: String
   let args: String
   let description: String
 }
 
-private let oscCommands: [OSCCommandInfo] = [
-  OSCCommandInfo(id: "/syphon/url", args: "string", description: "Load a URL (https:// added if no scheme is given)."),
-  OSCCommandInfo(
+private let oscCommands: [LegacyOSCCommandInfo] = [
+  LegacyOSCCommandInfo(id: "/syphon/url", args: "string", description: "Load a URL (https:// added if no scheme is given)."),
+  LegacyOSCCommandInfo(
     id: "/syphon/bookmark", args: "string or int",
     description: "Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int/float)."
   ),
-  OSCCommandInfo(id: "/syphon/bookmark/<label>", args: "none", description: "Load the bookmark with this OSC label."),
-  OSCCommandInfo(id: "/syphon/refresh", args: "none", description: "Reload the current page."),
+  LegacyOSCCommandInfo(id: "/syphon/bookmark/<label>", args: "none", description: "Load the bookmark with this OSC label."),
+  LegacyOSCCommandInfo(id: "/syphon/refresh", args: "none", description: "Reload the current page."),
 ]
 
 @available(macOS 14, *)

@@ -14,6 +14,7 @@ activity = ProcessInfo().beginActivity(
   checkBookmarkLabelValidation()
   checkOutputsMigration()
   checkOutputsModel()
+  checkOSCRoutes()
 #endif
 
 // Init metal and SQLite. The Syphon server itself is created per-instance in
