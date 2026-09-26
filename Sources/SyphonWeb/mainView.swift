@@ -2,9 +2,9 @@ import SwiftUI
 
 @available(macOS 14, *)
 struct MainView: View {
-  // The selected output (phase 1: the only one)
-  @ObservedObject var state: Output
+  @ObservedObject var model: AppModel
   @ObservedObject var oscController: OSCController
+
   @State private var bookmarks: [Bookmark] = Bookmark.getAll()
   @State private var selectedId: Int64?
   @State private var showAddBookmark: Bool = false
@@ -13,85 +13,56 @@ struct MainView: View {
   @State private var showDeleteConfirm: Bool = false
   @State private var bookmarkToDelete: Bookmark?
 
+  @State private var renamingOutputID: UUID?
+  @State private var outputPendingRemoval: Output?
+
   var body: some View {
     HSplitView {
-      List(selection: $selectedId) {
-        // Filter favs and non-faves
-        let nonFavorites = bookmarks.filter { mrk in
-          !mrk.favorite
-        }
+      SidebarContent(
+        output: model.selectedOutput, bookmarks: bookmarks, selectedId: $selectedId,
+        showAddBookmark: $showAddBookmark, editingId: $editingId,
+        showDeleteConfirm: $showDeleteConfirm, bookmarkToDelete: $bookmarkToDelete,
+        refreshBookmarks: refreshBookmarks
+      )
+      .id(model.selectedOutputID)
+      .frame(width: 200, alignment: .top)
 
-        let favorites = bookmarks.filter { mrk in
-          mrk.favorite
+      VStack(spacing: 0) {
+        HStack {
+          Text("Outputs").font(.headline)
+          Spacer()
+          Button(action: { model.addOutput() }) {
+            Label("Add Output", systemImage: "plus.rectangle.on.rectangle")
+          }
+          .disabled(model.outputs.count >= maxOutputs)
         }
+        .padding([.horizontal, .top], 12)
 
-        Section("Favorites") {
-          ForEach(
-            favorites
-          ) { bookmark in
-            makeBookmark(bookmark: bookmark)
-          }
-        }
-        Section("Bookmarks") {
-          ForEach(
-            nonFavorites
-          ) { bookmark in
-            makeBookmark(bookmark: bookmark)
-          }
-        }
-      }.listStyle(.sidebar)
-        .contextMenu(forSelectionType: Int64.self) { ids in
-          if let bookmark = singleBookmark(ids) {
-            Button("Open") { state.navigate(to: bookmark.url) }
-            Button("Edit…") { editingId = bookmark.id }
-            Button(bookmark.favorite ? "Unfavorite" : "Favorite") {
-              bookmark.toggleFavorite()
-              refreshBookmarks()
-            }
-            Divider()
-            Button("Delete…") {
-              bookmarkToDelete = bookmark
-              showDeleteConfirm = true
-            }
-          }
-        } primaryAction: { ids in
-          if let bookmark = singleBookmark(ids) {
-            state.navigate(to: bookmark.url)
-          }
-        }
-        .safeAreaInset(edge: .bottom) {
-          HStack {
-            Button(action: {
-              showAddBookmark = true
-            }) {
-              Label("Add", systemImage: "plus")
-            }
-            .popover(isPresented: $showAddBookmark) {
-              BookmarkEditor(saveTitle: "Create", existing: bookmarks) { name, url, label in
-                if let error = Bookmark.addNewBookmark(name: name, url: url, label: label) {
-                  return error
-                }
-                refreshBookmarks()
-                showAddBookmark = false
-                return nil
-              } onCancel: {
-                showAddBookmark = false
+        ScrollView {
+          LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+            ForEach(model.outputs) { output in
+              OutputTile(
+                output: output, stats: output.stats, isSelected: output.id == model.selectedOutputID,
+                canDuplicate: model.outputs.count < maxOutputs, canRemove: model.outputs.count > 1,
+                onSelect: { model.selectedOutputID = output.id },
+                onRename: { renamingOutputID = output.id },
+                onDuplicate: { model.duplicateOutput(output.id) },
+                onRemove: { outputPendingRemoval = output }
+              )
+              .popover(
+                isPresented: Binding(
+                  get: { renamingOutputID == output.id },
+                  set: { if !$0 { renamingOutputID = nil } })
+              ) {
+                RenameOutputPopover(output: output, model: model) { renamingOutputID = nil }
               }
             }
-            Button(action: {
-              state.reload()
-            }) {
-              Label("Refresh", systemImage: "arrow.clockwise")
-            }
-          }.padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }.frame(width: 200, alignment: .top)
-      VStack(spacing: 0) {
-        WebView(state: state).frame(
-          width: state.previewSize.width, height: state.previewSize.height
-        )
-        StatusBar(state: state, stats: state.stats, oscController: oscController)
-          .frame(width: state.previewSize.width, height: statusBarHeight)
+          }
+          .padding(12)
+        }
+
+        SelectedOutputStatusBar(output: model.selectedOutput, oscController: oscController)
+          .id(model.selectedOutputID)
       }
     }
     // Other --profile instances share the bookmark database
@@ -103,11 +74,110 @@ struct MainView: View {
         refreshBookmarks()
       }
     }
+    .confirmationDialog(
+      "Remove \u{201c}\(outputPendingRemoval?.name ?? "")\u{201d}?",
+      isPresented: Binding(
+        get: { outputPendingRemoval != nil }, set: { if !$0 { outputPendingRemoval = nil } })
+    ) {
+      Button("Remove", role: .destructive) {
+        if let output = outputPendingRemoval { model.removeOutput(output.id) }
+        outputPendingRemoval = nil
+      }
+    }
   }
 
   func refreshBookmarks() {
     bookmarks = []
     bookmarks = Bookmark.getAll()
+  }
+}
+
+// The bookmark sidebar, re-created (via `.id(model.selectedOutputID)` in MainView) whenever the
+// selected output changes, so `output` and the isLive/navigate/reload actions below always target
+// the current selection.
+@available(macOS 14, *)
+private struct SidebarContent: View {
+  @ObservedObject var output: Output
+  let bookmarks: [Bookmark]
+  @Binding var selectedId: Int64?
+  @Binding var showAddBookmark: Bool
+  @Binding var editingId: Int64?
+  @Binding var showDeleteConfirm: Bool
+  @Binding var bookmarkToDelete: Bookmark?
+  let refreshBookmarks: () -> Void
+
+  var body: some View {
+    List(selection: $selectedId) {
+      // Filter favs and non-faves
+      let nonFavorites = bookmarks.filter { mrk in
+        !mrk.favorite
+      }
+
+      let favorites = bookmarks.filter { mrk in
+        mrk.favorite
+      }
+
+      Section("Favorites") {
+        ForEach(
+          favorites
+        ) { bookmark in
+          makeBookmark(bookmark: bookmark)
+        }
+      }
+      Section("Bookmarks") {
+        ForEach(
+          nonFavorites
+        ) { bookmark in
+          makeBookmark(bookmark: bookmark)
+        }
+      }
+    }.listStyle(.sidebar)
+      .contextMenu(forSelectionType: Int64.self) { ids in
+        if let bookmark = singleBookmark(ids) {
+          Button("Open") { output.navigate(to: bookmark.url) }
+          Button("Edit…") { editingId = bookmark.id }
+          Button(bookmark.favorite ? "Unfavorite" : "Favorite") {
+            bookmark.toggleFavorite()
+            refreshBookmarks()
+          }
+          Divider()
+          Button("Delete…") {
+            bookmarkToDelete = bookmark
+            showDeleteConfirm = true
+          }
+        }
+      } primaryAction: { ids in
+        if let bookmark = singleBookmark(ids) {
+          output.navigate(to: bookmark.url)
+        }
+      }
+      .safeAreaInset(edge: .bottom) {
+        HStack {
+          Button(action: {
+            showAddBookmark = true
+          }) {
+            Label("Add", systemImage: "plus")
+          }
+          .popover(isPresented: $showAddBookmark) {
+            BookmarkEditor(saveTitle: "Create", existing: bookmarks) { name, url, label in
+              if let error = Bookmark.addNewBookmark(name: name, url: url, label: label) {
+                return error
+              }
+              refreshBookmarks()
+              showAddBookmark = false
+              return nil
+            } onCancel: {
+              showAddBookmark = false
+            }
+          }
+          Button(action: {
+            output.reload()
+          }) {
+            Label("Refresh", systemImage: "arrow.clockwise")
+          }
+        }.padding()
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
   }
 
   // Context menu actions only apply to a single bookmark
@@ -118,7 +188,7 @@ struct MainView: View {
 
   // Live = the bookmark's URL is what the web view was last told to load
   func isLive(_ bookmark: Bookmark) -> Bool {
-    Output.normalizedURL(bookmark.url) == state.url
+    Output.normalizedURL(bookmark.url) == output.url
   }
 
   @ViewBuilder func makeBookmark(bookmark: Bookmark) -> some View {

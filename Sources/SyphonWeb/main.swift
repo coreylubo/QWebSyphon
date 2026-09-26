@@ -13,6 +13,7 @@ activity = ProcessInfo().beginActivity(
 #if DEBUG
   checkBookmarkLabelValidation()
   checkOutputsMigration()
+  checkOutputsModel()
 #endif
 
 // Init metal and SQLite. The Syphon server itself is created per-instance in
@@ -42,6 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var model: AppModel!
   var oscController: OSCController!
   var settingsWindow: NSWindow?
+  var outputHost: OutputHost?
   private var oscPortCancellable: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -50,7 +52,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // with its final name.
     let model = AppModel()
     self.model = model
-    let state = model.selectedOutput
     self.oscController = OSCController(model: model)
     // @Published publishes on willSet (i.e. with the incoming value, before the stored property
     // is actually updated) — use the value the sink receives directly rather than re-reading
@@ -59,15 +60,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       self?.updateWindowTitle(port: port)
     }
 
-    // Main Window, sized from the guessed backing scale; corrected below once on screen
-    let initialPreview = state.previewSize
-    let mainSize: CGSize = CGSize(
-      width: initialPreview.width + 200, height: initialPreview.height + statusBarHeight)
+    // Main Window: sidebar + a 2x2 grid of 400x225 tiles + status bar. Resizable; the tiles are
+    // images, so nothing depends on its size.
+    let mainSize = CGSize(width: 200 + 2 * 400, height: 2 * 225 + statusBarHeight)
+    mainWindow.styleMask = [.closable, .titled, .miniaturizable, .resizable]
     mainWindow.setContentSize(mainSize)
-    mainWindow.styleMask = [.closable, .titled]
+    mainWindow.contentMinSize = CGSize(width: 700, height: 420)
     mainWindow.delegate = mainWindowDelegate
 
-    let mainViewInst = MainView(state: state, oscController: oscController)
+    let mainViewInst = MainView(model: model, oscController: oscController)
     let mainView: NSHostingView<MainView> = NSHostingView(rootView: mainViewInst)
     mainView.frame = CGRect(origin: .zero, size: mainSize)
     mainView.autoresizingMask = [.height, .width]
@@ -75,18 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.center()
     mainWindow.makeKeyAndOrderFront(mainWindow)
 
-    // The pre-display backing scale is unreliable; read the real value now that the window is on
-    // screen, and keep it current when the window moves between 1x/2x screens.
-    // Phase 1: every output's web view lives in the main window.
-    for output in model.outputs { output.backingScale = mainWindow.backingScaleFactor }
-    let window = mainWindow
-    NotificationCenter.default.addObserver(
-      forName: NSWindow.didChangeBackingPropertiesNotification, object: window, queue: .main
-    ) { _ in
-      Task { @MainActor in
-        for output in model.outputs { output.backingScale = window.backingScaleFactor }
-      }
-    }
+    // Hosts every output's web view; created once the main window is on screen, since it follows
+    // that window's screen (and takes its backing scale from there).
+    outputHost = OutputHost(model: model, mainWindow: mainWindow)
 
     setupAppMenu()
 
@@ -177,7 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
 
-    let settingsViewInst = SettingsView(model: model, state: model.selectedOutput, oscController: oscController)
+    let settingsViewInst = SettingsView(model: model, oscController: oscController)
     let hostingView = NSHostingView(rootView: settingsViewInst)
 
     let window = NSWindow(

@@ -19,37 +19,17 @@ private let oscCommands: [OSCCommandInfo] = [
 
 @available(macOS 14, *)
 struct SettingsView: View {
-  let model: AppModel
-  // The selected output (phase 1: the only one); name, resolution and transparency edit its config
-  @ObservedObject var state: Output
+  @ObservedObject var model: AppModel
   @ObservedObject var oscController: OSCController
 
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
-  @State private var syphonNameText: String = ""
-  @State private var syphonNameError: String?
 
   var body: some View {
     Form {
-      Section("Output") {
-        Picker("Resolution", selection: $state.resolution) {
-          ForEach(OutputResolution.allCases, id: \.self) { resolution in
-            Text(resolution.label).tag(resolution)
-          }
-        }
-      }
-
-      Section("Syphon") {
-        HStack {
-          TextField("Syphon name", text: $syphonNameText)
-            .onSubmit(applySyphonName)
-          Button("Apply", action: applySyphonName)
-        }
-        if let syphonNameError {
-          Text(syphonNameError).font(.caption).foregroundStyle(.red)
-        }
-      }
+      OutputSettingsSections(model: model, output: model.selectedOutput)
+        .id(model.selectedOutputID)
 
       Section("Instances") {
         Text("Profile: \(profileName ?? "default")")
@@ -76,15 +56,6 @@ struct SettingsView: View {
         }
       }
 
-      Section("Appearance") {
-        Toggle("Transparent background", isOn: $state.transparentBackground)
-        Text(
-          "The page must set a transparent background (e.g. body { background: transparent }). Output alpha is premultiplied."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      }
-
       Section("OSC Commands") {
         ForEach(oscCommands) { command in
           VStack(alignment: .leading, spacing: 1) {
@@ -106,24 +77,12 @@ struct SettingsView: View {
     .frame(minWidth: 420, minHeight: 480)
     .onAppear {
       portText = String(model.oscPort)
-      syphonNameText = state.name
       bookmarks = Bookmark.getAll()
     }
     // The window is retained, so onAppear runs once; keep the command list current
     .onReceive(bookmarksDidChangePublisher) { _ in
       bookmarks = Bookmark.getAll()
     }
-  }
-
-  private func applySyphonName() {
-    syphonNameError = nil
-    let trimmed = syphonNameText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      syphonNameError = "Syphon name can't be empty"
-      return
-    }
-    syphonNameText = trimmed
-    state.name = trimmed
   }
 
   private func applyPort() {
@@ -140,5 +99,128 @@ struct SettingsView: View {
     if oscController.start(port: port, explicit: true) {
       model.oscPort = port
     }
+  }
+}
+
+// Which resolution choice the picker shows. `.custom` maps to `output.customSize != nil`; the two
+// presets map to `output.resolution` when there's no custom size.
+private enum ResolutionChoice: Hashable {
+  case preset(OutputResolution)
+  case custom
+}
+
+// Output/Syphon/Appearance settings for one output. Re-created (via `.id(model.selectedOutputID)`
+// in SettingsView) whenever the selection changes, so every `@State` draft here (name text, W/H
+// text, errors) starts fresh for the newly selected output rather than leaking the old one's.
+@available(macOS 14, *)
+private struct OutputSettingsSections: View {
+  let model: AppModel
+  @ObservedObject var output: Output
+
+  @State private var resolutionChoice: ResolutionChoice
+  @State private var widthText: String
+  @State private var heightText: String
+  @State private var sizeError: String?
+  @State private var syphonNameText: String
+  @State private var syphonNameError: String?
+
+  init(model: AppModel, output: Output) {
+    self.model = model
+    self.output = output
+    _resolutionChoice = State(
+      initialValue: output.customSize == nil ? .preset(output.resolution) : .custom)
+    let size = output.pixelSize
+    _widthText = State(initialValue: String(Int(size.width)))
+    _heightText = State(initialValue: String(Int(size.height)))
+    _syphonNameText = State(initialValue: output.name)
+  }
+
+  var body: some View {
+    Section("Output") {
+      Text("Editing \u{201c}\(output.name)\u{201d}")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      Picker("Resolution", selection: $resolutionChoice) {
+        ForEach(OutputResolution.allCases, id: \.self) { resolution in
+          Text(resolution.label).tag(ResolutionChoice.preset(resolution))
+        }
+        Text("Custom").tag(ResolutionChoice.custom)
+      }
+      .onChange(of: resolutionChoice) { _, choice in
+        if case .preset(let resolution) = choice {
+          sizeError = nil
+          output.resolution = resolution
+          output.customSize = nil
+        }
+      }
+
+      if resolutionChoice == .custom {
+        HStack {
+          TextField("Width", text: $widthText).frame(width: 80)
+          Text("×")
+          TextField("Height", text: $heightText).frame(width: 80)
+          Button("Apply", action: applyCustomSize)
+        }
+        if let sizeError {
+          Text(sizeError).font(.caption).foregroundStyle(.red)
+        }
+      }
+    }
+
+    Section("Syphon") {
+      HStack {
+        TextField("Syphon name", text: $syphonNameText)
+          .onSubmit(applySyphonName)
+        Button("Apply", action: applySyphonName)
+      }
+      if let syphonNameError {
+        Text(syphonNameError).font(.caption).foregroundStyle(.red)
+      }
+    }
+
+    Section("Appearance") {
+      Toggle("Transparent background", isOn: $output.transparentBackground)
+      Text(
+        "The page must set a transparent background (e.g. body { background: transparent }). Output alpha is premultiplied."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      Toggle("Capture without clients", isOn: $output.captureWithoutClients)
+      Text(
+        "Keeps publishing frames while no Syphon client is connected. Turn off to save CPU."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+    }
+  }
+
+  private func applyCustomSize() {
+    sizeError = nil
+    guard let width = Int(widthText.trimmingCharacters(in: .whitespacesAndNewlines)),
+      let height = Int(heightText.trimmingCharacters(in: .whitespacesAndNewlines)),
+      let size = PixelSize(width: width, height: height)
+    else {
+      sizeError =
+        "Width must be \(PixelSize.widthRange.lowerBound)–\(PixelSize.widthRange.upperBound), "
+        + "height \(PixelSize.heightRange.lowerBound)–\(PixelSize.heightRange.upperBound)"
+      return
+    }
+    output.setCustomSize(size)
+  }
+
+  private func applySyphonName() {
+    syphonNameError = nil
+    let trimmed = syphonNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      syphonNameError = "Syphon name can't be empty"
+      return
+    }
+    if let error = model.renameOutput(output.id, to: trimmed) {
+      syphonNameError = error
+      return
+    }
+    syphonNameText = trimmed
   }
 }
