@@ -49,7 +49,7 @@ public struct PixelSize: Codable, Hashable, Sendable {
   public var cgSize: CGSize { CGSize(width: width, height: height) }
 }
 
-public let defaultOutputURL = "https://puppy.surf"
+public let defaultOutputURL = "https://www.google.com"
 
 // Hard cap on the number of outputs (phase 2 decision 2). Not derived from measurement of what's
 // actually fast — see the spike table in docs/multi-output-spec.md for the supported mixes.
