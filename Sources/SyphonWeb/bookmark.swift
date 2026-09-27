@@ -1,6 +1,7 @@
 import Combine
 import SQLite
 import SwiftUI
+import SyphonWebCore
 
 @available(macOS 14, *)
 @Observable
@@ -212,69 +213,6 @@ class Bookmark: Identifiable, Hashable {
     }
   }
 }
-
-// Validates a raw OSC label. Empty (after trimming) means no label. Labels are [A-Za-z0-9_-],
-// not all digits (numbers select by sidebar position), and unique case-insensitively.
-func validateBookmarkLabel(
-  _ raw: String, existing: [(id: Int64, label: String?)], excludingId: Int64?
-) -> (label: String?, error: String?) {
-  let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-  if label.isEmpty { return (nil, nil) }
-
-  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-  if !label.allSatisfy(allowed.contains) {
-    return (nil, "Labels may only contain letters, numbers, - and _")
-  }
-  if label.allSatisfy(\.isNumber) {
-    return (nil, "Labels can't be numbers (numbers select by sidebar position)")
-  }
-  let taken = existing.contains {
-    $0.id != excludingId && $0.label?.caseInsensitiveCompare(label) == .orderedSame
-  }
-  if taken { return (nil, "Label already used") }
-
-  return (label, nil)
-}
-
-// Validates the whole editor form: name and URL required, then the label.
-func validateBookmarkFields(
-  name: String, url: String, label: String, existing: [(id: Int64, label: String?)],
-  excludingId: Int64?
-) -> (label: String?, error: String?) {
-  if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (nil, "Name is required") }
-  if url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (nil, "URL is required") }
-  return validateBookmarkLabel(label, existing: existing, excludingId: excludingId)
-}
-
-#if DEBUG
-  // Runs at launch in debug builds; traps if label validation regresses.
-  func checkBookmarkLabelValidation() {
-    let existing: [(id: Int64, label: String?)] = [(1, "chuds"), (2, nil)]
-    func check(_ raw: String, _ id: Int64?, _ label: String?, _ fails: Bool) {
-      let result = validateBookmarkLabel(raw, existing: existing, excludingId: id)
-      precondition(
-        result.label == label && (result.error != nil) == fails,
-        "label check failed for \"\(raw)\": \(result)")
-    }
-    check("", nil, nil, false)
-    check("  chuds ", 1, "chuds", false)
-    check("chuds", 1, "chuds", false)
-    check("chuds", nil, nil, true)
-    check("Chuds", 2, nil, true)
-    check("123", nil, nil, true)
-    check("a b", nil, nil, true)
-    check("a/b", nil, nil, true)
-    check("x-1_y", nil, "x-1_y", false)
-    check("é", nil, nil, true)
-    precondition(
-      validateBookmarkFields(name: " ", url: "x", label: "", existing: [], excludingId: nil).error
-        != nil)
-    precondition(
-      validateBookmarkFields(name: "n", url: "", label: "", existing: [], excludingId: nil).error
-        != nil)
-    appLog("Bookmark label validation self-check passed")
-  }
-#endif
 
 extension Notification.Name {
   // Posted after any bookmark insert, update, favorite toggle or delete

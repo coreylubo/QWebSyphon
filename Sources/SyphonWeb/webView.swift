@@ -1,55 +1,8 @@
 import Combine
 import MetalKit
 import Syphon
+import SyphonWebCore
 import WebKit
-
-// Output pixel dimensions the Syphon server publishes. The preview (web view + window) is sized
-// separately, in points, by dividing these by the screen's backing scale factor.
-enum OutputResolution: String, CaseIterable, Codable, Sendable {
-  case hd720
-  case hd1080
-
-  var pixelSize: CGSize {
-    switch self {
-    case .hd720: CGSize(width: 1280, height: 720)
-    case .hd1080: CGSize(width: 1920, height: 1080)
-    }
-  }
-
-  var label: String {
-    switch self {
-    case .hd720: "720p"
-    case .hd1080: "1080p"
-    }
-  }
-}
-
-// A validated custom output pixel size (decision 6). The only way to build a valid one is the
-// failable initializer, which enforces the bounds. `Codable` is synthesized directly on the two
-// `Int` properties (bypassing the failable initializer) so an out-of-bounds size in stored JSON
-// still decodes — `sanitizeOutputConfigs` is what turns it back into `nil`, rather than the whole
-// `[OutputConfig]` array failing to decode.
-struct PixelSize: Codable, Hashable, Sendable {
-  static let widthRange = 16...3840
-  static let heightRange = 16...2160
-
-  let width: Int
-  let height: Int
-
-  private init(uncheckedWidth: Int, uncheckedHeight: Int) {
-    width = uncheckedWidth
-    height = uncheckedHeight
-  }
-
-  init?(width: Int, height: Int) {
-    guard PixelSize.widthRange.contains(width), PixelSize.heightRange.contains(height) else {
-      return nil
-    }
-    self.init(uncheckedWidth: width, uncheckedHeight: height)
-  }
-
-  var cgSize: CGSize { CGSize(width: width, height: height) }
-}
 
 // Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
 // explicitly saved before falling back to the next free port.
@@ -185,28 +138,10 @@ final class Output: ObservableObject, Identifiable {
   // The live web view, owned by this output's OutputWebViewController (outputHost.swift)
   weak var webView: WKWebView?
 
-  // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to `url`.
+  // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to
+  // `url`. Forwards to core's free function; module-qualified to avoid shadowing the name.
   nonisolated static func normalizedURL(_ string: String) -> URL? {
-    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    // Protocol-relative ("//example.com/path"): borrow https
-    if trimmed.hasPrefix("//") { return URL(string: "https:" + trimmed) }
-    // Only strings starting with "<scheme>://" or a known scheme-only form keep their scheme. "localhost:3000"
-    // would otherwise parse with scheme "localhost", and "127.0.0.1:3000" not at all.
-    let lower = trimmed.lowercased()
-    // Anchored at the start: "example.com/?next=https://x" has no scheme of its own
-    let keepsScheme =
-      trimmed.range(of: "^[A-Za-z][A-Za-z0-9+.-]*://", options: .regularExpression) != nil
-      || ["about:", "data:", "javascript:", "blob:"].contains { lower.hasPrefix($0) }
-    if keepsScheme { return URL(string: trimmed) }
-    // Local dev servers rarely have TLS: localhost and IPv4 literals get http, the rest https.
-    let host = lower.split(separator: "/", maxSplits: 1).first.map(String.init) ?? lower
-    let hostname = host.split(separator: ":").first.map(String.init) ?? host
-    let isLocal =
-      hostname == "localhost" || hostname.hasSuffix(".local")
-      || hostname.split(separator: ".").count == 4
-        && hostname.split(separator: ".").allSatisfy { UInt8($0) != nil }
-    return URL(string: (isLocal ? "http://" : "https://") + trimmed)
+    SyphonWebCore.normalizedURL(string)
   }
 
   // Normalizes a string and navigates the web view to it. For non-bookmark URLs only — clears

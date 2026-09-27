@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import SyphonWebCore
 
 @available(macOS 14, *)
 struct MainView: View {

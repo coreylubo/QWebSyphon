@@ -10,13 +10,6 @@ var activity: NSObjectProtocol?
 activity = ProcessInfo().beginActivity(
   options: ProcessInfo.ActivityOptions.userInitiated, reason: "No Napping!")
 
-#if DEBUG
-  checkBookmarkLabelValidation()
-  checkOutputsMigration()
-  checkOutputsModel()
-  checkOSCRoutes()
-#endif
-
 // Init metal and SQLite. The Syphon server itself is created per-instance in
 // AppDelegate once the final name is known (see Bug 1: creating it here with a placeholder
 // name and renaming afterwards means QLab's initial Syphon announce carries the wrong name).

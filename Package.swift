@@ -15,10 +15,16 @@ let package = Package(
             name: "Syphon",
             path: "./third_party/Syphon.xcframework"
         ),
+        // Pure logic (Foundation + CoreGraphics only, no Syphon/Metal/AppKit): testable directly
+        // with `swift test`, unlike the executable target below (unsafeFlags + top-level
+        // main.swift code make it unsuitable for `@testable import`).
+        .target(
+            name: "SyphonWebCore"
+        ),
         .executableTarget(
             name: "SyphonWeb",
             dependencies: [
-                "Syphon", .product(name: "SQLite", package: "sqlite.swift"),
+                "Syphon", "SyphonWebCore", .product(name: "SQLite", package: "sqlite.swift"),
                 .product(name: "SwiftOSC", package: "swift-osc"),
             ],
             swiftSettings: [
@@ -28,6 +34,10 @@ let package = Package(
                     "./third_party/Syphon.xcframework/macos-arm64_x86_64/Syphon.framework/Headers",
                 ])
             ]
+        ),
+        .testTarget(
+            name: "SyphonWebCoreTests",
+            dependencies: ["SyphonWebCore"]
         ),
     ]
 )
