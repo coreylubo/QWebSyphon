@@ -39,6 +39,14 @@ import Testing
     #expect(isOSCAddressableName("url"))
   }
 
+  // The app's default base name is slugForOutputName(defaultSyphonName()), i.e. "SyphonWeb" or
+  // "SyphonWeb <profile>": it must always be OSC-addressable.
+  @Test(arguments: [nil, "left", "Main Stage", "café", "123", "a/b"])
+  func defaultBaseNameIsAddressable(profile: String?) {
+    let name = profile.map { "SyphonWeb \($0)" } ?? "SyphonWeb"
+    #expect(isOSCAddressableName(slugForOutputName(name)))
+  }
+
   @Test func slugForOutputNameRules() {
     #expect(slugForOutputName("SyphonWeb left") == "SyphonWeb-left")
     #expect(slugForOutputName("a/b c") == "a-b-c")
