@@ -175,9 +175,13 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     webView.setFrameSize(size)
     webView.setLayoutScale(1 / scale)
     onResize()
-    // Spike surprise 3: vw/vh stay 0 after the layout SPI is set until the view is resized. The
-    // nudge has to run on a later runloop turn than `setLayoutScale`: in the same turn vw stays 0
-    // (measured). Skipped if another size change superseded this one meanwhile.
+    nudgeViewport(size: size)
+  }
+
+  // Spike surprise 3: vw/vh stay 0 after the layout SPI is set until the view is resized. The
+  // nudge has to run on a later runloop turn than `setLayoutScale`: in the same turn vw stays 0
+  // (measured). Skipped if another size change superseded this one meanwhile.
+  private func nudgeViewport(size: CGSize) {
     DispatchQueue.main.async { [webView] in
       guard webView.frame.size == size else { return }
       webView.setFrameSize(CGSize(width: size.width + 1, height: size.height + 1))
@@ -219,5 +223,12 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     output.loading = webView.isLoading
     output.loadError = error.localizedDescription
     appLog("Failed provisional loading URL: \(output.url) error: \(error)")
+  }
+
+  // A cross-site navigation swaps WebKit's WebContent process; the new process starts with the
+  // layout-mode-2 viewport unset, so vw/vh resolve to 0 until the view is resized. Nudge on every
+  // commit, not just on size changes, so this covers the process-swap case too.
+  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+    nudgeViewport(size: webView.frame.size)
   }
 }
