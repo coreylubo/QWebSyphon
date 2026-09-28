@@ -1,4 +1,4 @@
-# SyphonWebOSC
+# QWebSyphon
 
 A macOS app that renders a web page to a [Syphon](https://syphon.info) source, for use in
 show-control and live visual software — QLab, VDMX, TouchDesigner, Resolume, and anything else that
@@ -14,7 +14,7 @@ by clicking in its own window. All credit for that foundation goes to the origin
 The original SyphonWeb is a manual, single-page tool. This fork is built for running a page (or
 several) unattended during a live show, driven from a booth:
 
-- **Pages switch remotely over OSC** — no one needs to touch the SyphonWeb window during a show. See
+- **Pages switch remotely over OSC** — no one needs to touch the QWebSyphon window during a show. See
   [docs/OSC.md](docs/OSC.md).
 - **Pages are organized as bookmarks**, each with an optional OSC label, so a show file can address
   them by name (`/syphon/bookmark/lower-third`) instead of a raw URL.
@@ -50,7 +50,7 @@ several) unattended during a live show, driven from a booth:
 
 ## OSC control
 
-SyphonWeb listens for OSC messages over UDP, port 9000 by default (configurable in Settings). One
+QWebSyphon listens for OSC messages over UDP, port 9000 by default (configurable in Settings). One
 port serves every output — legacy (unscoped) addresses always target the legacy output; scoped
 addresses target a specific output by name or 1-based index:
 
@@ -74,18 +74,28 @@ behavior, and worked examples (QLab, TouchOSC, raw UDP) — is in [docs/OSC.md](
 
 ## Multiple instances
 
-Run more than one SyphonWeb window (each publishing its own Syphon server) with `--profile NAME`:
+Run more than one QWebSyphon window (each publishing its own Syphon server) with `--profile NAME`:
 
 ```
-open -n SyphonWeb.app --args --profile stage1
-swift run -c release SyphonWeb --profile stage1   # from source
+open -n QWebSyphon.app --args --profile stage1
+swift run -c release QWebSyphon --profile stage1   # from source
 ```
 
 Each profile gets its own settings (window position aside), stored separately — give each one a
 different OSC port in Settings so they don't collide. Bookmarks are stored in one shared database
 and are the same across every profile. The Syphon server name (Settings → Syphon) also defaults to
-`SyphonWeb <profile>` so each instance is identifiable in VDMX/TouchDesigner; change it there if you
+`QWebSyphon <profile>` so each instance is identifiable in VDMX/TouchDesigner; change it there if you
 want something else.
+
+## Upgrading from SyphonWeb
+
+This app used to be called SyphonWeb (bundle id `surf.puppy.SyphonWeb`). On first launch,
+QWebSyphon copies your old settings (each profile's too) into its own domain
+(`com.gr8xco.QWebSyphon`, `QWebSyphon.profile.<name>`); the old settings are left untouched.
+Bookmarks live in the same database file as before. Existing outputs keep their Syphon server
+names; only new outputs default to `QWebSyphon`. Syphon also advertises the app name, which is now
+QWebSyphon, so a client that matches sources by app + server name (e.g. a saved QLab cue) may need
+the source picked again once.
 
 ## Developing
 
@@ -99,13 +109,13 @@ Run `swift run` from the command line and it should boot right up.
 Because this project doesn't use Xcode, it takes a more rough approach to creating an app bundle: a
 "skeleton" app is filled up with the framework and binary, then patched to run properly.
 
-`build_app.sh` does all the steps and produces a `SyphonWeb.app` bundle in the root of the repo.
+`build_app.sh` does all the steps and produces a `QWebSyphon.app` bundle in the root of the repo.
 
 ## Limitations
 
 - Videos (like YouTube) do not render in the frame output — they're rendered on a different
   CoreGraphics context layer that this app doesn't have access to.
-- If the SyphonWeb window is fully covered by another window, or the screen locks or the display
+- If the QWebSyphon window is fully covered by another window, or the screen locks or the display
   sleeps, WebKit stops painting and output freezes (measured in the Phase 0 spike in
   `docs/multi-output-spec.md`). Show machines should disable screen lock and display sleep and keep
   the window at least partly visible.
@@ -114,7 +124,8 @@ Because this project doesn't use Xcode, it takes a more rough approach to creati
 
 Bookmarks are stored in a shared SQLite database at
 `~/Library/Application Support/syphon_web.sqlite`. Override the path (e.g. for testing) with the
-`SYPHONWEB_DB_PATH` environment variable.
+`QWEBSYPHON_DB_PATH` environment variable (the pre-rename `SYPHONWEB_DB_PATH`
+still works).
 
 ## Credits
 
