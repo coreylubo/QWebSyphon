@@ -49,18 +49,22 @@ struct OutputTile: View {
             .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3))
 
       HStack(spacing: 6) {
-        Circle()
-          .fill(OutputStatusStyle.clientColor(hasClients: stats.hasClients))
-          .frame(width: 6, height: 6)
+        if output.enabled {
+          Circle()
+            .fill(OutputStatusStyle.clientColor(hasClients: stats.hasClients))
+            .frame(width: 6, height: 6)
+        }
         Text(output.name)
           .font(.caption)
           .fontWeight(isSelected ? .bold : .regular)
           .lineLimit(1)
         Spacer()
-        Text(output.loading ? "— fps" : "\(stats.fps) fps")
-          .font(.caption)
-          .monospacedDigit()
-          .foregroundStyle(OutputStatusStyle.fpsColor(fps: stats.fps, loading: output.loading))
+        if output.enabled {
+          Text(output.loading ? "— fps" : "\(stats.fps) fps")
+            .font(.caption)
+            .monospacedDigit()
+            .foregroundStyle(OutputStatusStyle.fpsColor(fps: stats.fps, loading: output.loading))
+        }
         Button(action: onSettings) {
           Image(systemName: "gearshape")
         }
@@ -95,6 +99,9 @@ struct OutputTile: View {
     }
     .contextMenu {
       Button("Settings…", action: onSettings)
+      Button(output.enabled ? "Disable Output" : "Enable Output") {
+        output.enabled.toggle()
+      }
       Button("Duplicate", action: onDuplicate).disabled(!canDuplicate)
       Divider()
       Button("Delete Output…", action: onRemove).disabled(!canRemove)
@@ -102,7 +109,14 @@ struct OutputTile: View {
   }
 
   @ViewBuilder private var preview: some View {
-    if let cgImage = output.previewImage {
+    if !output.enabled {
+      ZStack {
+        Rectangle().fill(Color.black.opacity(0.6))
+        Text("Disabled")
+          .font(.caption)
+          .foregroundStyle(.white.opacity(0.6))
+      }
+    } else if let cgImage = output.previewImage {
       Image(decorative: cgImage, scale: 1)
         .resizable()
         .aspectRatio(contentMode: .fit)
@@ -211,6 +225,10 @@ struct OutputSettingsSections: View {
   }
 
   var body: some View {
+    Section {
+      Toggle("Enabled", isOn: $output.enabled)
+    }
+
     Section("Output") {
       Text("Editing \u{201c}\(output.name)\u{201d}")
         .font(.caption)
