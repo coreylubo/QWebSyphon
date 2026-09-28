@@ -15,11 +15,15 @@ public struct OutputHealth: Sendable {
   public var loading: Bool
   public var failed: Bool
   public var fps: Int
+  // A disabled output has no server/page to be healthy or unhealthy about; `statusLevel` ignores
+  // it entirely rather than counting it as ok, warning or error.
+  public var enabled: Bool
 
-  public init(loading: Bool, failed: Bool, fps: Int) {
+  public init(loading: Bool, failed: Bool, fps: Int, enabled: Bool = true) {
     self.loading = loading
     self.failed = failed
     self.fps = fps
+    self.enabled = enabled
   }
 }
 
@@ -32,11 +36,13 @@ public func outputStatusLevel(_ health: OutputHealth) -> StatusLevel {
   return .ok
 }
 
-// Overall level: error if any output failed or OSC isn't listening (control is down); else
-// warning if any output is loading or degraded; else ok. Error takes precedence over warning
-// even when a different output would only warrant a warning.
+// Overall level: error if any ENABLED output failed or OSC isn't listening (control is down);
+// else warning if any enabled output is loading or degraded; else ok. Disabled outputs never
+// affect the level either way. Error takes precedence over warning even when a different output
+// would only warrant a warning.
 public func statusLevel(outputs: [OutputHealth], oscListening: Bool) -> StatusLevel {
-  if !oscListening || outputs.contains(where: \.failed) { return .error }
-  if outputs.contains(where: { outputStatusLevel($0) == .warning }) { return .warning }
+  let relevant = outputs.filter(\.enabled)
+  if !oscListening || relevant.contains(where: \.failed) { return .error }
+  if relevant.contains(where: { outputStatusLevel($0) == .warning }) { return .warning }
   return .ok
 }
