@@ -15,6 +15,7 @@ import Testing
     #expect(validateOutputName("URL", existing: []) != nil)
     #expect(validateOutputName("bookmark", existing: []) != nil)
     #expect(validateOutputName("Refresh", existing: []) != nil)
+    #expect(validateOutputName("Enable", existing: []) == nil, "not reserved: /syphon/enable/url is unambiguous")
     #expect(validateOutputName("  Toast  ", existing: ["Main"]) == nil)
     // slug rule (chars, all-digits, max 64)
     #expect(validateOutputName("My Output", existing: []) != nil, "space not allowed")
@@ -95,6 +96,23 @@ import Testing
     let withBookmarkJSON = encodeOutputs([withBookmark])
     #expect(withBookmarkJSON.contains("bookmarkID"))
     #expect(decodeOutputs(withBookmarkJSON) == [withBookmark])
+
+    // enabled (default true) is omitted entirely, so old-shape JSON stays byte-identical
+    #expect(!presetJSON.contains("enabled"))
+
+    // disabled is written and round-trips
+    var disabled = preset
+    disabled.enabled = false
+    let disabledJSON = encodeOutputs([disabled])
+    #expect(disabledJSON.contains("\"enabled\":false"))
+    #expect(decodeOutputs(disabledJSON) == [disabled])
+
+    // absent `enabled` on old JSON decodes to true
+    let oldShapeJSON = """
+      [{"id":"\(UUID().uuidString)","name":"Old","url":"\(defaultOutputURL)","resolution":"hd720",\
+      "transparentBackground":false,"captureWithoutClients":true}]
+      """
+    #expect(decodeOutputs(oldShapeJSON)?[0].enabled == true)
   }
 
   @Test func liveBookmarkIDsMatching() {

@@ -10,6 +10,7 @@ import Testing
     #expect(parseOSCRoute("/syphon/url") == .url(.legacy))
     #expect(parseOSCRoute("/syphon/bookmark") == .bookmark(.legacy))
     #expect(parseOSCRoute("/syphon/refresh") == .refresh(.legacy))
+    #expect(parseOSCRoute("/syphon/enable") == .enable(.legacy))
     #expect(
       parseOSCRoute("/syphon/bookmark/lower-third") == .bookmarkLabel(.legacy, label: "lower-third"))
   }
@@ -18,10 +19,26 @@ import Testing
     #expect(parseOSCRoute("/syphon/Main/url") == .url(.named("Main")))
     #expect(parseOSCRoute("/syphon/Main/bookmark") == .bookmark(.named("Main")))
     #expect(parseOSCRoute("/syphon/Main/refresh") == .refresh(.named("Main")))
+    #expect(parseOSCRoute("/syphon/Main/enable") == .enable(.named("Main")))
     #expect(
       parseOSCRoute("/syphon/Main/bookmark/lower-third")
         == .bookmarkLabel(.named("Main"), label: "lower-third"))
     #expect(parseOSCRoute("/syphon/2/url") == .url(.named("2")))
+  }
+
+  @Test func enableArgumentParsing() {
+    // bool as-is; int/integral-float 0/1; string "0"/"1"; anything else rejected
+    #expect(parseEnableArgument(.bool(true)) == true)
+    #expect(parseEnableArgument(.bool(false)) == false)
+    #expect(parseEnableArgument(.int(1)) == true)
+    #expect(parseEnableArgument(.int(0)) == false)
+    #expect(parseEnableArgument(.int(2)) == nil)
+    #expect(parseEnableArgument(.double(1.0)) == true)
+    #expect(parseEnableArgument(.double(0.0)) == false)
+    #expect(parseEnableArgument(.double(0.5)) == nil, "non-integral float rejected")
+    #expect(parseEnableArgument(.string("1")) == true)
+    #expect(parseEnableArgument(.string("0")) == false)
+    #expect(parseEnableArgument(.string("true")) == nil)
   }
 
   @Test func bookmarkAmbiguityResolvesToLegacyLabel() {

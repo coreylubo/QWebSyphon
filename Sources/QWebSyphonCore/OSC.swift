@@ -15,15 +15,16 @@ public enum OSCRoute: Equatable, Sendable {
   case bookmark(OSCOutputScope)
   case bookmarkLabel(OSCOutputScope, label: String)
   case refresh(OSCOutputScope)
+  case enable(OSCOutputScope)
 }
 
 // Parses an OSC address into a route. Splits on `/` keeping empty subsequences, so a leading `/`
 // is required (segment 0 empty) and no other segment may be empty — this rejects `/syphon//url`
 // and any trailing `/`. Segment counts are exact:
-//   ["syphon", cmd]                    legacy url/bookmark/refresh
+//   ["syphon", cmd]                    legacy url/bookmark/refresh/enable
 //   ["syphon", "bookmark", label]      legacy bookmark label (always this form: "bookmark" is a
 //                                      reserved output name, so it can never be an `<output>`)
-//   ["syphon", out, cmd]               scoped url/bookmark/refresh
+//   ["syphon", out, cmd]               scoped url/bookmark/refresh/enable
 //   ["syphon", out, "bookmark", label] scoped bookmark label
 // Anything else (wrong prefix, wrong counts, unknown command word) returns nil.
 public func parseOSCRoute(_ address: String) -> OSCRoute? {
@@ -39,6 +40,7 @@ public func parseOSCRoute(_ address: String) -> OSCRoute? {
     case "url": return .url(.legacy)
     case "bookmark": return .bookmark(.legacy)
     case "refresh": return .refresh(.legacy)
+    case "enable": return .enable(.legacy)
     default: return nil
     }
   case 2:
@@ -47,6 +49,7 @@ public func parseOSCRoute(_ address: String) -> OSCRoute? {
     case "url": return .url(.named(rest2[0]))
     case "bookmark": return .bookmark(.named(rest2[0]))
     case "refresh": return .refresh(.named(rest2[0]))
+    case "enable": return .enable(.named(rest2[0]))
     default: return nil
     }
   case 3:
@@ -110,4 +113,31 @@ public func resolveBookmark(
   }
 
   return nil
+}
+
+// A `/syphon/.../enable` argument, stripped of the SwiftOSC `any OSCValue` existential so the
+// parser below is pure and testable without the app's OSC dependency.
+public enum OSCEnableArgument: Equatable, Sendable {
+  case int(Int)
+  case double(Double)
+  case bool(Bool)
+  case string(String)
+}
+
+// Parses a `/syphon/.../enable` argument to a bool: `Bool` as-is; `0`/`1` (int or exactly
+// integral float — TouchOSC sends floats for what are logically ints, as with the other
+// handlers); the strings `"0"`/`"1"`. Anything else (other ints, non-integral floats, other
+// strings) is rejected.
+public func parseEnableArgument(_ value: OSCEnableArgument) -> Bool? {
+  switch value {
+  case .bool(let bool):
+    return bool
+  case .int(let int):
+    return int == 1 ? true : (int == 0 ? false : nil)
+  case .double(let double):
+    guard let int = Int(exactly: double) else { return nil }
+    return parseEnableArgument(.int(int))
+  case .string(let string):
+    return string == "1" ? true : (string == "0" ? false : nil)
+  }
 }

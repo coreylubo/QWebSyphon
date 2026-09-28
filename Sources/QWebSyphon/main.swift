@@ -276,6 +276,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // Start!
 if #available(macOS 14, *) {
   let app: NSApplication = NSApplication.shared
+  // Always dark: set before AppDelegate (and its main window) is created, so every window,
+  // popover, menu and the About panel comes up dark from the start.
+  app.appearance = NSAppearance(named: .darkAqua)
   let delegate: AppDelegate = AppDelegate()
   // Fallback on earlier versions
   app.delegate = delegate

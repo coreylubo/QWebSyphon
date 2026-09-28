@@ -60,10 +60,12 @@ addresses target a specific output by name or 1-based index:
 | `/syphon/bookmark` | string or int/float | Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int, or a whole-number float for senders like TouchOSC), in the legacy output. |
 | `/syphon/bookmark/<label>` | none | Load the bookmark with this exact OSC label, in the legacy output. |
 | `/syphon/refresh` | none | Reload the current page in the legacy output. |
+| `/syphon/enable` | `0`\|`1` (or `true`/`false`, or an integral number) | Disable (`0`) or enable (`1`) the legacy output. |
 | `/syphon/<output>/url` | string | Same as `/syphon/url`, targeting `<output>` (its name, case-insensitive, or its 1-based position). |
 | `/syphon/<output>/bookmark` | string or int/float | Same as `/syphon/bookmark`, targeting `<output>`. |
 | `/syphon/<output>/bookmark/<label>` | none | Same as `/syphon/bookmark/<label>`, targeting `<output>`. |
 | `/syphon/<output>/refresh` | none | Same as `/syphon/refresh`, targeting `<output>`. |
+| `/syphon/<output>/enable` | `0`\|`1` (or `true`/`false`, or an integral number) | Same as `/syphon/enable`, targeting `<output>`. |
 
 An output's name must match the OSC slug rule (letters, digits, `-`, `_`) to be addressable by
 name; an older hand-edited name that doesn't (e.g. one with spaces) is still addressable by index.

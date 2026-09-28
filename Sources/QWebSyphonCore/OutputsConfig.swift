@@ -72,7 +72,7 @@ private let legacyOutputResolutionKey = "outputResolution"
 private let legacyTransparentBackgroundKey = "transparentBackground"
 
 // Persisted settings of one output. The whole array is stored as one JSON string under `outputs`.
-public struct OutputConfig: Codable, Equatable, Sendable {
+public struct OutputConfig: Equatable, Sendable {
   public var id: UUID
   public var name: String
   public var url: String
@@ -90,11 +90,15 @@ public struct OutputConfig: Codable, Equatable, Sendable {
   // reason as `customSize`: omitted entirely when nil so phase 1/2 JSON stays byte-identical, and
   // missing on old JSON decodes to nil rather than failing.
   public var bookmarkID: Int64?
+  // Whether the output's server/capture/page are live (phase 4 decision). Custom `Codable` below
+  // (not synthesized) so absent on old JSON decodes to `true` and it's encoded only when `false` —
+  // phase 1/2/3 JSON for an enabled output stays byte-identical.
+  public var enabled: Bool
 
   public init(
     id: UUID, name: String, url: String, resolution: OutputResolution,
     customSize: PixelSize? = nil, transparentBackground: Bool, captureWithoutClients: Bool,
-    bookmarkID: Int64? = nil
+    bookmarkID: Int64? = nil, enabled: Bool = true
   ) {
     self.id = id
     self.name = name
@@ -104,6 +108,7 @@ public struct OutputConfig: Codable, Equatable, Sendable {
     self.transparentBackground = transparentBackground
     self.captureWithoutClients = captureWithoutClients
     self.bookmarkID = bookmarkID
+    self.enabled = enabled
   }
 
   // `name` has no default here (unlike the app's pre-move version): the old default called
@@ -112,7 +117,43 @@ public struct OutputConfig: Codable, Equatable, Sendable {
   public static func makeDefault(id: UUID = UUID(), name: String) -> OutputConfig {
     OutputConfig(
       id: id, name: name, url: defaultOutputURL, resolution: .hd720, transparentBackground: false,
-      captureWithoutClients: true, bookmarkID: nil)
+      captureWithoutClients: true, bookmarkID: nil, enabled: true)
+  }
+}
+
+extension OutputConfig: Codable {
+  private enum CodingKeys: String, CodingKey {
+    case id, name, url, resolution, customSize, transparentBackground, captureWithoutClients,
+      bookmarkID, enabled
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    url = try container.decode(String.self, forKey: .url)
+    resolution = try container.decode(OutputResolution.self, forKey: .resolution)
+    customSize = try container.decodeIfPresent(PixelSize.self, forKey: .customSize)
+    transparentBackground = try container.decode(Bool.self, forKey: .transparentBackground)
+    captureWithoutClients = try container.decode(Bool.self, forKey: .captureWithoutClients)
+    bookmarkID = try container.decodeIfPresent(Int64.self, forKey: .bookmarkID)
+    // Absent on JSON from before this field existed (phase 1/2/3): defaults to enabled.
+    enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encode(url, forKey: .url)
+    try container.encode(resolution, forKey: .resolution)
+    try container.encodeIfPresent(customSize, forKey: .customSize)
+    try container.encode(transparentBackground, forKey: .transparentBackground)
+    try container.encode(captureWithoutClients, forKey: .captureWithoutClients)
+    try container.encodeIfPresent(bookmarkID, forKey: .bookmarkID)
+    // Written only when disabled, so an enabled output's JSON stays byte-identical to before this
+    // field existed (phase 1/2/3).
+    if !enabled { try container.encode(enabled, forKey: .enabled) }
   }
 }
 

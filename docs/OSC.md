@@ -48,13 +48,13 @@ Source: `Sources/QWebSyphon/oscServer.swift`, `Sources/QWebSyphon/webView.swift`
 One process, one OSC port, any number of outputs. Every command has two forms:
 
 - **Legacy (unscoped)** — `/syphon/url`, `/syphon/bookmark`, `/syphon/bookmark/<label>`,
-  `/syphon/refresh` — always targets the **legacy output** (the one created by the one-output→
-  multi-output migration, tracked by a fixed id, never by selection or array position). If the
-  legacy output has been removed, these are logged ("`no output for /syphon/url, ignoring`") and
-  dropped rather than silently retargeted to another output.
+  `/syphon/refresh`, `/syphon/enable` — always targets the **legacy output** (the one created by
+  the one-output→multi-output migration, tracked by a fixed id, never by selection or array
+  position). If the legacy output has been removed, these are logged ("`no output for
+  /syphon/url, ignoring`") and dropped rather than silently retargeted to another output.
 - **Scoped** — `/syphon/<output>/url`, `/syphon/<output>/bookmark`,
-  `/syphon/<output>/bookmark/<label>`, `/syphon/<output>/refresh` — targets `<output>`, resolved
-  (`resolveOutput`) as:
+  `/syphon/<output>/bookmark/<label>`, `/syphon/<output>/refresh`, `/syphon/<output>/enable` —
+  targets `<output>`, resolved (`resolveOutput`) as:
   1. **All-digit** → a 1-based index into the current output list (`1` = first output). `0`,
      negative, or past the last output is logged and dropped.
   2. **Otherwise** → a case-insensitive match against an output's name — but only names that pass
@@ -131,12 +131,26 @@ three) and is logged as unhandled, rather than looking up a label `"foo/bar"`. A
 (`/syphon/bookmark/foo/`) fails the same way — it produces an empty final segment.
 
 Note the ambiguity rule: `/syphon/bookmark/<x>` is *always* the legacy label form, never a scoped
-address for an output named "bookmark" — `bookmark` is a reserved output name (along with `url`
-and `refresh`), so no output can ever collide with it.
+address for an output named "bookmark" — `bookmark` is a reserved output name (along with `url`,
+`refresh` and `enable`), so no output can ever collide with it.
 
 ### `/syphon/refresh` · `/syphon/<output>/refresh`
 
-Reloads the current page in the target output (`webView?.reload()`). No arguments used.
+Reloads the current page in the target output (`webView?.reload()`). No arguments used. No-ops on
+a disabled output — there's nothing loaded to reload.
+
+### `/syphon/enable <bool|0|1|int|float>` · `/syphon/<output>/enable <bool|0|1|int|float>`
+
+Enables (`1`/`true`) or disables (`0`/`false`) the target output. Accepts (`parseEnableArgument`):
+a `Bool` argument as-is; an integral number (`Int32`/`Int64` directly, or `Float32`/`Double` only
+when exactly `0` or `1` — same TouchOSC-friendly rule as `/syphon/bookmark`'s numeric argument);
+or the strings `"0"`/`"1"`. Any other value (a non-0/1 number, a non-integral float, another
+string) is logged and ignored.
+
+Disabling stops and drops the output's Syphon server (the source disappears from clients) and
+unloads its page to free CPU; the output's URL and bookmark are untouched, so a later `/url` or
+`/bookmark` sent while disabled (to pre-stage the next cue) is saved but doesn't load anything
+until enabled. Enabling recreates the server under the output's current name and reloads its URL.
 
 ## Bookmark labels
 

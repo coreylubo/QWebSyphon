@@ -196,7 +196,9 @@ final class AppModel: ObservableObject {
   // rest. The first capture always runs, even if it alone exceeds the deadline.
   private func captureOutputs() {
     let start = ProcessInfo.processInfo.systemUptime
-    let order = captureOrder(ids: outputs.map(\.id), startID: nextCaptureID)
+    // Disabled outputs never publish a frame (`Output.captureFrame` guards too); excluded here as
+    // well so they never occupy a slot in the round robin or the capture deadline.
+    let order = captureOrder(ids: outputs.filter(\.enabled).map(\.id), startID: nextCaptureID)
     nextCaptureID = nil
     for (i, id) in order.enumerated() {
       if i > 0, ProcessInfo.processInfo.systemUptime - start >= captureDeadline {
