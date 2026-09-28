@@ -106,12 +106,42 @@ struct OutputTile: View {
       Image(decorative: cgImage, scale: 1)
         .resizable()
         .aspectRatio(contentMode: .fit)
+        .background {
+          if output.transparentBackground {
+            CheckerboardBackground()
+          }
+        }
     } else {
       ZStack {
         Rectangle().fill(Color.black)
         Text(output.loadError != nil ? "Failed" : "Loading…")
           .font(.caption)
           .foregroundStyle(.white.opacity(0.6))
+      }
+    }
+  }
+}
+
+// Alpha-transparency indicator behind a transparent-background output's preview image — the
+// standard "this is where the alpha shows" checkerboard. Placed via `.background` on the
+// aspect-fit `Image` in `OutputTile.preview` so it inherits that view's exact frame (the
+// aspect-fit rect), not the tile's own frame, which can be taller/wider when letterboxed.
+private struct CheckerboardBackground: View {
+  private let squareSize: CGFloat = 8
+
+  var body: some View {
+    Canvas { context, size in
+      let columns = Int(ceil(size.width / squareSize))
+      let rows = Int(ceil(size.height / squareSize))
+      for row in 0..<rows {
+        for column in 0..<columns {
+          let rect = CGRect(
+            x: CGFloat(column) * squareSize, y: CGFloat(row) * squareSize,
+            width: squareSize, height: squareSize)
+          let isLight = (row + column).isMultiple(of: 2)
+          context.fill(
+            Path(rect), with: .color(isLight ? Color(white: 0.85) : Color(white: 0.65)))
+        }
       }
     }
   }
