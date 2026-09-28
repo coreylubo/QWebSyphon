@@ -1,7 +1,7 @@
 import Foundation
 import os
 import SwiftOSC
-import SyphonWebCore
+import QWebSyphonCore
 
 let defaultOSCPort: UInt16 = 9000
 private let bookmarkAddressPrefix = "/syphon/bookmark/"

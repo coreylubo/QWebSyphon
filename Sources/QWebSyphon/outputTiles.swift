@@ -1,5 +1,5 @@
 import SwiftUI
-import SyphonWebCore
+import QWebSyphonCore
 import UniformTypeIdentifiers
 
 // Drag payload for a bookmark row -> an output tile's drop target (mainView.swift is the drag

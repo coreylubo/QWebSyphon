@@ -14,6 +14,6 @@
     "-Xswiftc",
     "-import-objc-header",
     "-Xswiftc",
-    "./Sources/SyphonWeb/SyphonWeb-Bridging-Header.h"
+    "./Sources/QWebSyphon/QWebSyphon-Bridging-Header.h"
   ]
 }

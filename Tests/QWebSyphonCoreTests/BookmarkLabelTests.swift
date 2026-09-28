@@ -1,6 +1,6 @@
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // Ported from the app's `checkBookmarkLabelValidation` self-check (pre-move `bookmark.swift`).
 @Suite struct BookmarkLabelTests {

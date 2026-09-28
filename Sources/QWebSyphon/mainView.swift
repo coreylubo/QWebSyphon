@@ -1,6 +1,6 @@
 import Combine
 import SwiftUI
-import SyphonWebCore
+import QWebSyphonCore
 
 @available(macOS 14, *)
 struct MainView: View {

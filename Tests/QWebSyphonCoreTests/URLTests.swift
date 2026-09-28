@@ -1,6 +1,6 @@
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // New coverage for `normalizedURL` (no prior DEBUG self-check existed for it; moved from
 // `Output.normalizedURL` in the app's `webView.swift`, which now forwards here).

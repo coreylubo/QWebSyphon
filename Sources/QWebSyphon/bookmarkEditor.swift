@@ -1,5 +1,5 @@
 import SwiftUI
-import SyphonWebCore
+import QWebSyphonCore
 
 // Name/URL/OSC label form shared by the Add and Edit popovers. `onSave` receives trimmed values
 // and returns an error message to show, or nil on success (the caller dismisses the popover).

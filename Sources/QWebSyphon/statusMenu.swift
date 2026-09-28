@@ -1,5 +1,5 @@
 import AppKit
-import SyphonWebCore
+import QWebSyphonCore
 
 // Status bar item + menu, owned by AppDelegate for the app's lifetime. Icon composition is
 // adapted from tcb-gross-prophets-osc-monitor/mac/Prompter/main.swift's `AppController.statusImage`:

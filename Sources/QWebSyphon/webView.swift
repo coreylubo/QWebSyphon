@@ -1,7 +1,7 @@
 import Combine
 import MetalKit
 import Syphon
-import SyphonWebCore
+import QWebSyphonCore
 import WebKit
 
 // Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
@@ -141,7 +141,7 @@ final class Output: ObservableObject, Identifiable {
   // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to
   // `url`. Forwards to core's free function; module-qualified to avoid shadowing the name.
   nonisolated static func normalizedURL(_ string: String) -> URL? {
-    SyphonWebCore.normalizedURL(string)
+    QWebSyphonCore.normalizedURL(string)
   }
 
   // Normalizes a string and navigates the web view to it. For non-bookmark URLs only — clears

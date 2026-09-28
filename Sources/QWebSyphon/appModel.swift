@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import CoreGraphics
 import Metal
-import SyphonWebCore
+import QWebSyphonCore
 
 // Base name for newly added/default outputs: a slug of `defaultSyphonName()` (e.g. "SyphonWeb
 // left" -> "SyphonWeb-left"), so `uniqueOutputName(base: defaultOutputBaseName(), ...)` always

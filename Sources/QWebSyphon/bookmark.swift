@@ -1,7 +1,7 @@
 import Combine
 import SQLite
 import SwiftUI
-import SyphonWebCore
+import QWebSyphonCore
 
 @available(macOS 14, *)
 @Observable

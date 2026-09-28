@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // Ported from the app's `checkOutputsModel` self-check (pre-move `appModel.swift`).
 @Suite struct OutputsModelTests {

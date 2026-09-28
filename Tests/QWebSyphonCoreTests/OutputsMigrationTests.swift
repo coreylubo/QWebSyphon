@@ -1,14 +1,14 @@
 import Foundation
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // A suite named by absolute path is a plist at that path, so nothing lands in
 // ~/Library/Preferences (cfprefsd leaves an empty plist there even after
 // removePersistentDomain). Mirrors the app's old `#if DEBUG` self-check helper.
 private func withSuite(_ body: (UserDefaults) -> Void) {
   let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(
-    "SyphonWebCoreTests.\(UUID().uuidString)")
+    "QWebSyphonCoreTests.\(UUID().uuidString)")
   let defaults = UserDefaults(suiteName: path)!
   body(defaults)
   defaults.removePersistentDomain(forName: path)

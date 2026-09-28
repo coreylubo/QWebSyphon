@@ -4,19 +4,19 @@
       "type": "swift",
       "request": "launch",
       "args": [],
-      "cwd": "${workspaceFolder:SyphonWeb}",
-      "name": "Debug SyphonWeb",
-      "program": "${workspaceFolder:SyphonWeb}/.build/debug/SyphonWeb",
-      "preLaunchTask": "swift: Build Debug SyphonWeb"
+      "cwd": "${workspaceFolder:QWebSyphon}",
+      "name": "Debug QWebSyphon",
+      "program": "${workspaceFolder:QWebSyphon}/.build/debug/QWebSyphon",
+      "preLaunchTask": "swift: Build Debug QWebSyphon"
     },
     {
       "type": "swift",
       "request": "launch",
       "args": [],
-      "cwd": "${workspaceFolder:SyphonWeb}",
-      "name": "Release SyphonWeb",
-      "program": "${workspaceFolder:SyphonWeb}/.build/release/SyphonWeb",
-      "preLaunchTask": "swift: Build Release SyphonWeb"
+      "cwd": "${workspaceFolder:QWebSyphon}",
+      "name": "Release QWebSyphon",
+      "program": "${workspaceFolder:QWebSyphon}/.build/release/QWebSyphon",
+      "preLaunchTask": "swift: Build Release QWebSyphon"
     }
   ]
 }
