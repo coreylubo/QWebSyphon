@@ -69,9 +69,14 @@ struct StatusBar: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      clientsLabel
-      fpsLabel
-      pageStateLabel
+      // Disabled: no server, capture or page, so client/fps/page health doesn't apply
+      if state.enabled {
+        clientsLabel
+        fpsLabel
+        pageStateLabel
+      } else {
+        Text("Disabled").foregroundStyle(.secondary)
+      }
       oscLabel
       Spacer()
     }
