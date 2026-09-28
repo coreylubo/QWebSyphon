@@ -1,17 +1,17 @@
 import Combine
 import MetalKit
 import Syphon
-import SyphonWebCore
+import QWebSyphonCore
 import WebKit
 
 // Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
 // explicitly saved before falling back to the next free port.
 let oscPortDefaultsKey = "oscPort"
 
-// Default Syphon server name: "SyphonWeb", or "SyphonWeb <profile>" when running under a profile.
+// Default Syphon server name: "QWebSyphon", or "QWebSyphon <profile>" when running under a profile.
 func defaultSyphonName() -> String {
-  guard let profileName else { return "SyphonWeb" }
-  return "SyphonWeb \(profileName)"
+  guard let profileName else { return "QWebSyphon" }
+  return "QWebSyphon \(profileName)"
 }
 
 // Valid OSC listen ports (avoids the well-known/privileged range below 1024).
@@ -141,7 +141,7 @@ final class Output: ObservableObject, Identifiable {
   // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to
   // `url`. Forwards to core's free function; module-qualified to avoid shadowing the name.
   nonisolated static func normalizedURL(_ string: String) -> URL? {
-    SyphonWebCore.normalizedURL(string)
+    QWebSyphonCore.normalizedURL(string)
   }
 
   // Normalizes a string and navigates the web view to it. For non-bookmark URLs only — clears

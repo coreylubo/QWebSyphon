@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleGetInfoString</key>
-  <string>SyphonWeb</string>
+  <string>QWebSyphon</string>
   <key>CFBundleExecutable</key>
-  <string>SyphonWeb</string>
+  <string>QWebSyphon</string>
   <key>CFBundleIdentifier</key>
-  <string>surf.puppy.SyphonWeb</string>
+  <string>com.gr8xco.QWebSyphon</string>
   <key>CFBundleName</key>
-  <string>SyphonWeb</string>
+  <string>QWebSyphon</string>
   <key>CFBundleIconFile</key>
-  <string>SyphonWeb.icns</string>
+  <string>QWebSyphon.icns</string>
   <key>CFBundleShortVersionString</key>
   <string>1.0.0</string>
   <key>CFBundleInfoDictionaryVersion</key>

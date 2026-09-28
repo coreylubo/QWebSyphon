@@ -1,6 +1,6 @@
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 @Suite struct StatusTests {
 

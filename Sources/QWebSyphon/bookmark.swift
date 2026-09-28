@@ -1,7 +1,7 @@
 import Combine
 import SQLite
 import SwiftUI
-import SyphonWebCore
+import QWebSyphonCore
 
 @available(macOS 14, *)
 @Observable
@@ -215,19 +215,20 @@ class Bookmark: Identifiable, Hashable {
 }
 
 extension Notification.Name {
-  // Posted after any bookmark insert, update, favorite toggle or delete
+  // Posted after any bookmark insert, update, favorite toggle or delete. Keeps its pre-rename
+  // name: old SyphonWeb processes share the same database, so both versions must hear each other.
   static let bookmarksDidChange = Notification.Name("SyphonWebBookmarksDidChange")
 }
 
 // Bookmarks live in one database shared by every --profile instance, so the change is announced
-// both in-process and to other SyphonWeb processes.
+// both in-process and to other QWebSyphon processes.
 func postBookmarksDidChange() {
   NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
   DistributedNotificationCenter.default().postNotificationName(
     .bookmarksDidChange, object: nil, userInfo: nil, deliverImmediately: true)
 }
 
-// Fires for bookmark changes made in this process or any other SyphonWeb instance
+// Fires for bookmark changes made in this process or any other QWebSyphon instance
 var bookmarksDidChangePublisher: some Publisher<Notification, Never> {
   NotificationCenter.default.publisher(for: .bookmarksDidChange)
     .merge(with: DistributedNotificationCenter.default().publisher(for: .bookmarksDidChange))

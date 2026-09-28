@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SyphonWeb",
+    name: "QWebSyphon",
     platforms: [
         .macOS(.v13)
     ],
@@ -19,12 +19,12 @@ let package = Package(
         // with `swift test`, unlike the executable target below (unsafeFlags + top-level
         // main.swift code make it unsuitable for `@testable import`).
         .target(
-            name: "SyphonWebCore"
+            name: "QWebSyphonCore"
         ),
         .executableTarget(
-            name: "SyphonWeb",
+            name: "QWebSyphon",
             dependencies: [
-                "Syphon", "SyphonWebCore", .product(name: "SQLite", package: "sqlite.swift"),
+                "Syphon", "QWebSyphonCore", .product(name: "SQLite", package: "sqlite.swift"),
                 .product(name: "SwiftOSC", package: "swift-osc"),
             ],
             swiftSettings: [
@@ -36,8 +36,8 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "SyphonWebCoreTests",
-            dependencies: ["SyphonWebCore"]
+            name: "QWebSyphonCoreTests",
+            dependencies: ["QWebSyphonCore"]
         ),
     ]
 )

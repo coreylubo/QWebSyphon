@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // Ported from the app's `checkOSCRoutes` self-check (pre-move `oscServer.swift`).
 @Suite struct OSCRoutesTests {

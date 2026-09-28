@@ -3,7 +3,7 @@ import SQLite
 
 @available(macOS 13.0, *)
 func getDbPath() -> String {
-  if let override = ProcessInfo.processInfo.environment["SYPHONWEB_DB_PATH"], !override.isEmpty {
+  if let override = appEnvironment("DB_PATH") {
     return override
   }
   var appSupportUrl = FileManager.default.urls(

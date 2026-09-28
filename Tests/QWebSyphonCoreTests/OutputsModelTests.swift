@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 
-@testable import SyphonWebCore
+@testable import QWebSyphonCore
 
 // Ported from the app's `checkOutputsModel` self-check (pre-move `appModel.swift`).
 @Suite struct OutputsModelTests {
@@ -39,11 +39,11 @@ import Testing
     #expect(isOSCAddressableName("url"))
   }
 
-  // The app's default base name is slugForOutputName(defaultSyphonName()), i.e. "SyphonWeb" or
-  // "SyphonWeb <profile>": it must always be OSC-addressable.
+  // The app's default base name is slugForOutputName(defaultSyphonName()), i.e. "QWebSyphon" or
+  // "QWebSyphon <profile>": it must always be OSC-addressable.
   @Test(arguments: [nil, "left", "Main Stage", "café", "123", "a/b"])
   func defaultBaseNameIsAddressable(profile: String?) {
-    let name = profile.map { "SyphonWeb \($0)" } ?? "SyphonWeb"
+    let name = profile.map { "QWebSyphon \($0)" } ?? "QWebSyphon"
     #expect(isOSCAddressableName(slugForOutputName(name)))
   }
 
@@ -54,11 +54,11 @@ import Testing
 
   @Test func uniqueOutputNameSuffixing() {
     // "-N" suffix (not " N"), so a unique/default name is always slug-shaped
-    #expect(uniqueOutputName(base: "SyphonWeb", existing: []) == "SyphonWeb")
-    #expect(uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb"]) == "SyphonWeb-2")
+    #expect(uniqueOutputName(base: "QWebSyphon", existing: []) == "QWebSyphon")
+    #expect(uniqueOutputName(base: "QWebSyphon", existing: ["QWebSyphon"]) == "QWebSyphon-2")
     #expect(
-      uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb", "SyphonWeb-2"]) == "SyphonWeb-3")
-    #expect(uniqueOutputName(base: "SyphonWeb", existing: ["syphonweb"]) == "SyphonWeb-2")
+      uniqueOutputName(base: "QWebSyphon", existing: ["QWebSyphon", "QWebSyphon-2"]) == "QWebSyphon-3")
+    #expect(uniqueOutputName(base: "QWebSyphon", existing: ["qwebsyphon"]) == "QWebSyphon-2")
   }
 
   @Test func sanitizeGrandfathersNonSlugNames() {

@@ -1,12 +1,12 @@
 # OSC control reference
 
-Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
-`Sources/SyphonWeb/appModel.swift`, `Sources/SyphonWeb/bookmark.swift`,
-`Sources/SyphonWeb/settingsView.swift`.
+Source: `Sources/QWebSyphon/oscServer.swift`, `Sources/QWebSyphon/webView.swift`,
+`Sources/QWebSyphon/appModel.swift`, `Sources/QWebSyphon/bookmark.swift`,
+`Sources/QWebSyphon/settingsView.swift`.
 
 ## Transport
 
-- **UDP only.** SyphonWeb starts an `OSCUDPServer` (no TCP server).
+- **UDP only.** QWebSyphon starts an `OSCUDPServer` (no TCP server).
 - **Listens on all interfaces.** The server is created with no `interface` argument, and swift-osc's
   default binding for a `nil` interface is the IPv4 wildcard address `0.0.0.0` (see
   `hostAddressStringForBinding` in `swift-osc-io-nio`'s `Network Utilities.swift`) — not `localhost`.
@@ -24,7 +24,7 @@ Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
   the status becomes "Failed to bind UDP `<port>`: `<error>`" and the port setting is not persisted
   (so a bad Apply doesn't disable fallback on the next launch).
 - The main window's title bar and the status bar both show the bound port (e.g.
-  `SyphonWeb · OSC 9000`, or `SyphonWeb — stage1 · OSC 9001` under a profile).
+  `QWebSyphon · OSC 9000`, or `QWebSyphon — stage1 · OSC 9001` under a profile).
 - macOS may prompt for permission to accept incoming network connections the first time the app
   binds a listening socket — allow it, or OSC control won't reach the app.
 
@@ -36,7 +36,7 @@ Source: `Sources/SyphonWeb/oscServer.swift`, `Sources/SyphonWeb/webView.swift`,
 - **Bundles are unpacked into individual messages.** The server is created with
   `receiveHandler: .messages { message, _, _, _ in ... }`. Internally
   (`OSCPacketDispatcherProtocol.dispatch`), an incoming `.bundle` is recursively walked and every
-  contained message is dispatched to the handler separately — SyphonWeb's dispatch code only ever
+  contained message is dispatched to the handler separately — QWebSyphon's dispatch code only ever
   sees single `OSCMessage` values, never a bundle.
 - **No OSC wildcard/pattern matching.** `dispatchOSCMessage` parses `message.addressPattern
   .stringValue` with `parseOSCRoute`, an exact-segment parser (see "Addressing an output" below),
@@ -78,7 +78,7 @@ built by reading that list rather than this doc.
 
 Every message — recognized or not — is recorded via `controller.recordOSC(address:)` before any
 dispatch logic runs, so the status bar's "last OSC message" always reflects the most recent packet
-received, whether or not SyphonWeb understood it.
+received, whether or not QWebSyphon understood it.
 
 ### `/syphon/url <string>` · `/syphon/<output>/url <string>`
 
