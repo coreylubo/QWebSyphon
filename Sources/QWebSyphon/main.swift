@@ -36,16 +36,15 @@ class WindowDelegate: NSObject, NSWindowDelegate {
 
   // With the Dock icon hidden, the app has no other way back on screen than the menu bar (no Dock
   // icon, no main menu), so closing the window just hides it — outputs and OSC keep running, and
-  // "Show Window" in the status menu brings it back. With the Dock icon shown, unchanged: closing
-  // quits (windowWillClose below).
+  // "Show Window" in the status menu brings it back. With the Dock icon shown, closing quits —
+  // through `terminate`, so the quit confirmation runs first and Cancel leaves the window open.
   func windowShouldClose(_ sender: NSWindow) -> Bool {
-    guard !showDockIconEnabled() else { return true }
-    sender.orderOut(nil)
+    if showDockIconEnabled() {
+      NSApp.terminate(nil)
+    } else {
+      sender.orderOut(nil)
+    }
     return false
-  }
-
-  func windowWillClose(_ notification: Notification) {
-    NSApplication.shared.terminate(0)
   }
 }
 
@@ -150,6 +149,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if !visible {
       NSApp.activate(ignoringOtherApps: true)
     }
+  }
+
+  // Every quit path (⌘Q, the status menu, closing the main window) asks first: quitting drops
+  // every Syphon source mid-show. Cancel is the default button, so a stray Return doesn't quit.
+  // Logout, restart and shutdown aren't held up.
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    let systemReasons = [
+      kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog,
+      kAEShutDown,
+    ].map { UInt32($0) }
+    if let reason = NSAppleEventManager.shared().currentAppleEvent?
+      .attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue,
+      systemReasons.contains(reason)
+    {
+      return .terminateNow
+    }
+
+    NSApp.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.messageText = "Quit QWebSyphon?"
+    let count = model.outputs.count
+    alert.informativeText =
+      "\(count == 1 ? "The Syphon output stops" : "All \(count) Syphon outputs stop"), and clients like QLab lose \(count == 1 ? "its source" : "their sources")."
+    alert.addButton(withTitle: "Cancel")
+    let quit = alert.addButton(withTitle: "Quit")
+    quit.hasDestructiveAction = true
+    return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
   }
 
   func applicationWillTerminate(_ notification: Notification) {
