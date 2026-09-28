@@ -30,23 +30,23 @@ private func withSuite(_ body: (UserDefaults) -> Void) {
     #expect(toCopy["a"] as? Int == 1)
   }
 
-  @Test func copiesOnceFromFirstNonEmptyDomainWithoutTouchingIt() {
+  @Test func mergesAllDomainsOnceEarlierWinsWithoutTouchingThem() {
     withSuite { defaults in
       defaults.set("keep", forKey: "oscPort")
       var old: [String: [String: Any]] = [
         "empty": [:],
         "src": ["oscPort": 9001, "outputs": "[{}]", "showDockIcon": false],
-        "later": ["other": 1],
+        "later": ["other": 1, "outputs": "later"],
       ]
       let snapshot = old["src"]! as NSDictionary
       let source = migrateLegacyDefaults(
         into: defaults, legacyDomains: ["missing", "empty", "src", "later"], read: { old[$0] })
-      #expect(source == "src")
+      #expect(source == "src,later")
       #expect(defaults.string(forKey: "oscPort") == "keep")
       #expect(defaults.string(forKey: "outputs") == "[{}]")
       #expect(defaults.object(forKey: "showDockIcon") as? Bool == false)
-      #expect(defaults.object(forKey: "other") == nil)
-      #expect(defaults.string(forKey: legacyDefaultsMarkerKey) == "src")
+      #expect(defaults.integer(forKey: "other") == 1, "later domains fill keys the earlier lacked")
+      #expect(defaults.string(forKey: legacyDefaultsMarkerKey) == "src,later")
       #expect(old["src"]! as NSDictionary == snapshot)
 
       // Marker set: a second run copies nothing, even if the old domain changed.

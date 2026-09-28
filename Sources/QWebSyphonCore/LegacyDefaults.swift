@@ -3,11 +3,13 @@ import Foundation
 // One-time copy of settings from the pre-rename SyphonWeb defaults domains. Old domains are only
 // ever read, never modified or deleted, so the old app keeps working and rollback is free.
 
-// Set in the new domain once the copy has run (value: the source domain, or "" if none had data).
+// Set in the new domain once the copy has run (value: the comma-joined source domains, or "" if
+// none had data).
 public let legacyDefaultsMarkerKey = "migratedFromSyphonWeb"
 
-// Old domains to copy from, in preference order; the first with any data wins. The bundled app's
-// standard domain was its bundle id, `swift run`'s was the executable name.
+// Old domains to copy from, in preference order: every one is merged in, and on a key present in
+// several the earlier domain wins. The bundled app's standard domain was its bundle id, `swift
+// run`'s was the executable name.
 public func legacyDefaultsDomains(profile: String?, isBundled: Bool) -> [String] {
   if let profile { return ["SyphonWeb.profile.\(profile)"] }
   return isBundled ? ["surf.puppy.SyphonWeb", "SyphonWeb"] : ["SyphonWeb", "surf.puppy.SyphonWeb"]
@@ -23,20 +25,23 @@ public func legacyDefaultsToCopy(old: [String: Any], new: [String: Any]) -> [Str
 // present" is judged against `defaults.dictionaryRepresentation()`, which also includes the global
 // domain: a key set there is never copied, so nothing visible to the new app is ever overwritten.
 // ponytail: an old per-app override of a global key (e.g. AppleLanguages) is not carried over.
-// Returns the source domain copied from ("" if no old domain had data), nil if the marker was set.
+// Returns the comma-joined source domains ("" if no old domain had data), nil if the marker was set.
 @discardableResult
 public func migrateLegacyDefaults(
   into defaults: UserDefaults, legacyDomains: [String],
   read: (String) -> [String: Any]?, log: (String) -> Void = { _ in }
 ) -> String? {
   guard defaults.object(forKey: legacyDefaultsMarkerKey) == nil else { return nil }
-  let source = legacyDomains.first { !(read($0) ?? [:]).isEmpty }
-  if let source {
-    let toCopy = legacyDefaultsToCopy(
-      old: read(source) ?? [:], new: defaults.dictionaryRepresentation())
+  var sources: [String] = []
+  for domain in legacyDomains {
+    guard let old = read(domain), !old.isEmpty else { continue }
+    // Re-read after each domain so an earlier domain's copied keys win over a later one's.
+    let toCopy = legacyDefaultsToCopy(old: old, new: defaults.dictionaryRepresentation())
     for (key, value) in toCopy { defaults.set(value, forKey: key) }
-    log("Copied \(toCopy.count) settings from \(source) (source left untouched)")
+    log("Copied \(toCopy.count) settings from \(domain) (source left untouched)")
+    sources.append(domain)
   }
-  defaults.set(source ?? "", forKey: legacyDefaultsMarkerKey)
-  return source ?? ""
+  let marker = sources.joined(separator: ",")
+  defaults.set(marker, forKey: legacyDefaultsMarkerKey)
+  return marker
 }
