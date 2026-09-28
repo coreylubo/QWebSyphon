@@ -187,6 +187,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let editMenuItem = NSMenuItem()
     let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+    let redoItem = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+    redoItem.keyEquivalentModifierMask = [.command, .shift]
+    editMenu.addItem(redoItem)
+    editMenu.addItem(NSMenuItem.separator())
     editMenu.addItem(
       NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
     editMenu.addItem(
@@ -207,6 +212,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     viewMenu.addItem(reloadItem)
     viewMenuItem.submenu = viewMenu
     mainMenu.addItem(viewMenuItem)
+
+    // Standard window commands: without a Close item, ⌘W on any window (e.g. Settings) has no
+    // handler and AppKit plays the error sound — not something to hear mid-show.
+    let windowMenuItem = NSMenuItem()
+    let windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(
+      NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+    windowMenu.addItem(
+      NSMenuItem(
+        title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+    windowMenuItem.submenu = windowMenu
+    mainMenu.addItem(windowMenuItem)
+    NSApp.windowsMenu = windowMenu
 
     NSApp.mainMenu = mainMenu
   }
@@ -267,7 +285,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let window = NSWindow(
       contentRect: CGRect(x: 0, y: 0, width: 460, height: 520),
-      styleMask: [.closable, .titled],
+      styleMask: [.closable, .titled, .miniaturizable],
       backing: .buffered,
       defer: false
     )
