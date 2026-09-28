@@ -223,7 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let credits = NSMutableAttributedString()
     for piece in [
-      line("The Great Experience Company"),
+      line("The Great Experience Company", link: "https://gr8x.co"),
       line("\n\n"),
       line("Based on SyphonWeb by Digit (@doawoo)"),
       line("\n"),
