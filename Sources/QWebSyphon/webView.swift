@@ -8,10 +8,10 @@ import WebKit
 // explicitly saved before falling back to the next free port.
 let oscPortDefaultsKey = "oscPort"
 
-// Default Syphon server name: "SyphonWeb", or "SyphonWeb <profile>" when running under a profile.
+// Default Syphon server name: "QWebSyphon", or "QWebSyphon <profile>" when running under a profile.
 func defaultSyphonName() -> String {
-  guard let profileName else { return "SyphonWeb" }
-  return "SyphonWeb \(profileName)"
+  guard let profileName else { return "QWebSyphon" }
+  return "QWebSyphon \(profileName)"
 }
 
 // Valid OSC listen ports (avoids the well-known/privileged range below 1024).

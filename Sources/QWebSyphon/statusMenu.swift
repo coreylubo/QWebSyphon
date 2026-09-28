@@ -56,7 +56,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     menu.addItem(.separator())
 
     let quitItem = NSMenuItem(
-      title: "Quit SyphonWeb", action: #selector(quitTapped), keyEquivalent: "")
+      title: "Quit QWebSyphon", action: #selector(quitTapped), keyEquivalent: "")
     quitItem.target = self
     menu.addItem(quitItem)
 
@@ -169,7 +169,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     let height: CGFloat = 18
     guard
       let symbol = NSImage(
-        systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "SyphonWeb")
+        systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "QWebSyphon")
     else {
       return NSImage(size: NSSize(width: height, height: height))
     }

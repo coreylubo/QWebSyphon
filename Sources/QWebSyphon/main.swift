@@ -135,11 +135,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     for output in model.outputs { output.frameServer?.stop() }
   }
 
-  // "SyphonWeb — left · OSC 9001" (profile + actual bound port), or "SyphonWeb · OSC 9000"
+  // "QWebSyphon — left · OSC 9001" (profile + actual bound port), or "QWebSyphon · OSC 9000"
   // for the default profile. Reflects the OSC controller's actual bound port (which may differ
   // from the configured/requested port after a fallback), not just the configured one.
   private func updateWindowTitle(port: UInt16?) {
-    let base = profileName.map { "SyphonWeb — \($0)" } ?? "SyphonWeb"
+    let base = profileName.map { "QWebSyphon — \($0)" } ?? "QWebSyphon"
     guard let port else {
       mainWindow.title = base
       return
@@ -154,7 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appMenu = NSMenu()
 
     let aboutItem = NSMenuItem(
-      title: "About SyphonWeb", action: #selector(showAbout), keyEquivalent: "")
+      title: "About QWebSyphon", action: #selector(showAbout), keyEquivalent: "")
     aboutItem.target = self
     appMenu.addItem(aboutItem)
     appMenu.addItem(NSMenuItem.separator())
@@ -167,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     appMenu.addItem(
       NSMenuItem(
-        title: "Quit SyphonWeb", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        title: "Quit QWebSyphon", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     )
 
     appMenuItem.submenu = appMenu
@@ -238,7 +238,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       credits.append(piece)
     }
 
-    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+    NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "QWebSyphon", .credits: credits])
   }
 
   @objc private func showSettings() {

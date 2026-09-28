@@ -24,7 +24,7 @@ struct SettingsView: View {
         Toggle("Show in Dock", isOn: $showDockIcon)
           .onChange(of: showDockIcon) { _, newValue in onDockIconChange(newValue) }
         Text(
-          "Per profile. Off: SyphonWeb lives in the menu bar only, and closing the window hides it instead of quitting."
+          "Per profile. Off: QWebSyphon lives in the menu bar only, and closing the window hides it instead of quitting."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -33,7 +33,7 @@ struct SettingsView: View {
       Section("Instances") {
         Text("Profile: \(profileName ?? "default")")
         Text(
-          "Run more instances with `open -n SyphonWeb.app --args --profile NAME`. Each profile has its own settings; set a different OSC port per profile. Bookmarks are shared."
+          "Run more instances with `open -n QWebSyphon.app --args --profile NAME`. Each profile has its own settings; set a different OSC port per profile. Bookmarks are shared."
         )
         .font(.caption)
         .foregroundStyle(.secondary)

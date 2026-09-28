@@ -4,8 +4,8 @@ import CoreGraphics
 import Metal
 import QWebSyphonCore
 
-// Base name for newly added/default outputs: a slug of `defaultSyphonName()` (e.g. "SyphonWeb
-// left" -> "SyphonWeb-left"), so `uniqueOutputName(base: defaultOutputBaseName(), ...)` always
+// Base name for newly added/default outputs: a slug of `defaultSyphonName()` (e.g. "QWebSyphon
+// left" -> "QWebSyphon-left"), so `uniqueOutputName(base: defaultOutputBaseName(), ...)` always
 // produces an OSC-addressable name. Stays in the app: `defaultSyphonName()` reads the profile.
 func defaultOutputBaseName() -> String { slugForOutputName(defaultSyphonName()) }
 
@@ -89,7 +89,7 @@ final class AppModel: ObservableObject {
   }
 
   // Adds a new output with a default config (720p, default URL) and a unique default-based name
-  // ("SyphonWeb", "SyphonWeb-2", …). Nil at `maxOutputs`.
+  // ("QWebSyphon", "QWebSyphon-2", …). Nil at `maxOutputs`.
   @discardableResult
   func addOutput() -> Output? {
     guard outputs.count < maxOutputs else { return nil }

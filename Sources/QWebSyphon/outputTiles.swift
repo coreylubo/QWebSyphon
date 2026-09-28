@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 // Drag payload for a bookmark row -> an output tile's drop target (mainView.swift is the drag
 // source, this file the drop destination). Plain text, prefixed so an arbitrary text drag from
 // elsewhere is ignored rather than parsed as a bogus bookmark id.
-let bookmarkDragPrefix = "syphonweb-bookmark:"
+let bookmarkDragPrefix = "qwebsyphon-bookmark:"
 func bookmarkDragPayload(_ id: Int64) -> String { "\(bookmarkDragPrefix)\(id)" }
 func parseBookmarkDragPayload(_ string: String) -> Int64? {
   guard string.hasPrefix(bookmarkDragPrefix) else { return nil }
