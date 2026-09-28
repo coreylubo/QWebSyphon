@@ -15,7 +15,7 @@ import Testing
     #expect(validateOutputName("URL", existing: []) != nil)
     #expect(validateOutputName("bookmark", existing: []) != nil)
     #expect(validateOutputName("Refresh", existing: []) != nil)
-    #expect(validateOutputName("Enable", existing: []) != nil)
+    #expect(validateOutputName("Enable", existing: []) == nil, "not reserved: /syphon/enable/url is unambiguous")
     #expect(validateOutputName("  Toast  ", existing: ["Main"]) == nil)
     // slug rule (chars, all-digits, max 64)
     #expect(validateOutputName("My Output", existing: []) != nil, "space not allowed")

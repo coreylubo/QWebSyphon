@@ -92,6 +92,9 @@ final class Output: ObservableObject, Identifiable {
       } else {
         frameServer?.stop()
         frameServer = nil
+        // So re-enabling shows the placeholder until a fresh frame, not the last one from before.
+        previewImage = nil
+        tileDirty = false
       }
       onConfigChange?()
     }

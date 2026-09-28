@@ -57,7 +57,7 @@ public let maxOutputs = 4
 
 // Names that OSC scoped addresses (phase 4) reserve for command words, so they can never collide
 // with an output name. Enforced now (phase 2) so an output can't be renamed into one later.
-public let reservedOutputNames = ["url", "bookmark", "refresh", "enable"]
+public let reservedOutputNames = ["url", "bookmark", "refresh"]
 
 // Per-profile (appDefaults) key for the outputs model. The app's `saveOutputs` writes under this
 // key directly, so it stays public; the other migration-only keys below are core-internal.
