@@ -35,8 +35,8 @@ public func liveBookmarkIDs(
 
 // Small upright copy of a capture-layout buffer for a tile. The buffer is bottom-up (row 0 is the
 // page's bottom, as Syphon expects), so it is drawn flipped, and capped at `tileImageMaxWidth`.
-// The app passes the GPU-downscaled readback of the published texture (`Output.refreshTile`),
-// which is already at most that wide.
+// Used by the CPU-capture fallback only (`Output.refreshTile`); the GPU path downscales into an
+// IOSurface instead.
 public func makeTileImage(_ context: CGContext) -> CGImage? {
   guard let snapshot = context.makeImage() else { return nil }
   let width = min(context.width, tileImageMaxWidth)

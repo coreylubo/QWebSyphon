@@ -1,4 +1,5 @@
 import Combine
+import IOSurface
 import MetalKit
 import MetalPerformanceShaders
 import Syphon
@@ -60,10 +61,24 @@ final class Output: ObservableObject, Identifiable {
   // `setCustomSize` rather than assigning directly so `resolution` tracks the nearest preset.
   @Published var customSize: PixelSize? { didSet { onConfigChange?() } }
 
-  // Tile preview image, refreshed at ~15 Hz by AppModel (`refreshTile`) from a GPU readback of
-  // the published texture. Only UI subscribes to it. Downscaled and upright (`makeTileImage`).
-  @Published var previewImage: CGImage?
-  // Set by captureFrame, cleared by `refreshTile` when it queues a readback: a new frame since the last tile
+  // Tile preview, shown by OutputTile's `TileLayerView`. GPU path: `contents` is one of the two
+  // `tileSurfaces` (IOSurface), drawn by the window server with no CPU copy; its rows are bottom-up
+  // like the capture texture, hence the flip. CPU fallback: an upright CGImage (`makeTileImage`).
+  // Set directly (not via SwiftUI) so a tile update never re-renders the view tree.
+  let tileLayer: CALayer = {
+    let layer = CALayer()
+    layer.contentsGravity = .resizeAspect
+    layer.isOpaque = false
+    layer.transform = CATransform3DMakeScale(1, cpuCapture ? 1 : -1, 1)
+    layer.actions = [
+      "contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "transform": NSNull(),
+    ]
+    return layer
+  }()
+  // Whether `tileLayer` has a frame; the tile shows a placeholder until then. Changes only on
+  // show/clear, not per frame.
+  @Published private(set) var hasTile = false
+  // Set by captureFrame, cleared by `refreshTile` when it queues a tile: a new frame since the last tile
   var tileDirty = false
 
   // When true, the web view and Syphon output are transparent instead of opaque white. Requires
@@ -94,9 +109,8 @@ final class Output: ObservableObject, Identifiable {
         frameServer?.stop()
         frameServer = nil
         // So re-enabling shows the placeholder until a fresh frame, not the last one from before.
-        previewImage = nil
-        tileDirty = false
-        tileCommands = nil
+        resetTile()
+        showTile(nil)
       }
       onConfigChange?()
     }
@@ -204,12 +218,14 @@ final class Output: ObservableObject, Identifiable {
   // GPU path: composites the web view's layer tree straight into `texture`. Bound to one texture,
   // so recreated (lazily, by captureFrame) whenever initMetal replaces it.
   private var renderer: CARenderer?
-  // Tile readback: `texture` downscaled on the GPU into `tileTexture`, blitted into `tileBuffer`
-  // (wrapped by `tileContext`), turned into `previewImage` once `tileCommands` has completed.
-  private var tileTexture: MTLTexture?
-  private var tileBuffer: MTLBuffer?
-  private var tileContext: CGContext?
-  private var tileCommands: MTLCommandBuffer?
+  // GPU tile: `texture` downscaled on the GPU into one of two IOSurface-backed textures, shown in
+  // `tileLayer` once that command buffer completes. Double-buffered so the surface on screen is
+  // never written. `tileGeneration` is bumped by `resetTile` (initMetal, disable) so a completion
+  // from before it is dropped.
+  private var tileSurfaces: [(surface: IOSurface, texture: MTLTexture)] = []
+  private var shownTileSurface: Int?
+  private var tileInFlight = false
+  private var tileGeneration = 0
 
   // (Re)creates the texture, context and region at an exact output pixel size. Called
   // synchronously (no awaits) so a 60 Hz capture tick never sees a mismatched texture/context.
@@ -238,23 +254,26 @@ final class Output: ObservableObject, Identifiable {
 
     region = MTLRegionMake2D(0, 0, pixelWidth, pixelHeight)
 
+    // A tile still in flight targets the old surfaces: `resetTile` drops it. The new texture holds
+    // nothing until the next capture. The layer keeps the last tile (it retains its own surface or
+    // image) until a new one is ready, rather than flashing the placeholder.
+    resetTile()
     let tileWidth = min(pixelWidth, tileImageMaxWidth)
     let tileHeight = max(1, pixelHeight * tileWidth / pixelWidth)
-    let tileDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-      pixelFormat: .rgba8Unorm, width: tileWidth, height: tileHeight, mipmapped: false)
-    tileDescriptor.usage = [.shaderRead, .shaderWrite]
-    tileTexture = metalDevice.makeTexture(descriptor: tileDescriptor)
-    tileBuffer = metalDevice.makeBuffer(length: tileWidth * tileHeight * 4, options: .storageModeShared)
-    tileContext = tileBuffer.flatMap {
-      CGContext(
-        data: $0.contents(), width: tileWidth, height: tileHeight, bitsPerComponent: 8,
-        bytesPerRow: tileWidth * 4, space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-    }
-    // A readback still in flight targets the old buffer: drop it rather than read it. The new
-    // texture holds nothing until the next capture, so there is nothing to read back yet either.
-    tileCommands = nil
+    tileSurfaces =
+      cpuCapture ? [] : (0..<2).compactMap { _ in makeTileSurface(width: tileWidth, height: tileHeight) }
+  }
+
+  private func resetTile() {
+    tileGeneration += 1
+    tileInFlight = false
+    shownTileSurface = nil
     tileDirty = false
+  }
+
+  private func showTile(_ contents: Any?) {
+    tileLayer.contents = contents
+    if hasTile != (contents != nil) { hasTile = contents != nil }
   }
 
   // Captures the web view into the texture and publishes it. Called by AppModel's capture
@@ -326,48 +345,67 @@ final class Output: ObservableObject, Identifiable {
     renderer.endFrame()
   }
 
-  // Called by AppModel's tile timer. Turns the previous readback into `previewImage` once the GPU
-  // has finished it, then (if a new frame was captured) queues the next one: downscale + blit on
-  // the capture queue, never waited on, so the capture tick never stalls.
+  // Called by AppModel's tile timer. CPU fallback: builds the tile from `graphicsContext` right
+  // away. GPU: downscales the latest capture into the surface not on screen, on the capture queue,
+  // never waited on; the completion (main actor) puts it on screen.
   func refreshTile(commandQueue: MTLCommandQueue) {
-    guard enabled else { return }
+    guard enabled, tileDirty else { return }
     // CPU fallback: the captured pixels are already in `graphicsContext`. Reading them here
     // (between captures, on the main actor) avoids a GPU readback racing the CPU-side
     // `texture.replace` of the next capture.
     if let graphicsContext {
-      guard tileDirty else { return }
       tileDirty = false
-      previewImage = makeTileImage(graphicsContext)
+      showTile(makeTileImage(graphicsContext))
       return
     }
-    if let pending = tileCommands {
-      guard pending.status == .completed else { return }
-      tileCommands = nil
-      previewImage = tileContext.flatMap(makeTileImage)
-    }
-    guard tileDirty, let texture, let tileTexture, let tileBuffer,
+    let target = shownTileSurface == 0 ? 1 : 0
+    guard !tileInFlight, let texture, tileSurfaces.indices.contains(target),
       let commandBuffer = commandQueue.makeCommandBuffer()
     else { return }
     tileDirty = false
+    tileInFlight = true
     tileScaler.encode(
-      commandBuffer: commandBuffer, sourceTexture: texture, destinationTexture: tileTexture)
-    guard let blit = commandBuffer.makeBlitCommandEncoder() else { return }
-    blit.copy(
-      from: tileTexture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-      sourceSize: MTLSize(width: tileTexture.width, height: tileTexture.height, depth: 1),
-      to: tileBuffer, destinationOffset: 0, destinationBytesPerRow: tileTexture.width * 4,
-      destinationBytesPerImage: tileBuffer.length)
-    blit.endEncoding()
+      commandBuffer: commandBuffer, sourceTexture: texture,
+      destinationTexture: tileSurfaces[target].texture)
+    let generation = tileGeneration
+    commandBuffer.addCompletedHandler { [weak self] _ in
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          guard let self, self.tileGeneration == generation else { return }
+          self.tileInFlight = false
+          self.shownTileSurface = target
+          self.showTile(self.tileSurfaces[target].surface)
+        }
+      }
+    }
     commandBuffer.commit()
-    tileCommands = commandBuffer
   }
+}
+
+// One tile surface: BGRA (what CALayer expects from an IOSurface), premultiplied like the capture.
+// MPS converts from the capture's RGBA through the texture formats.
+@MainActor private func makeTileSurface(width: Int, height: Int) -> (IOSurface, MTLTexture)? {
+  let bytesPerRow = IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, (width * 4 + 63) & ~63)
+  guard
+    let surface = IOSurface(properties: [
+      .width: width, .height: height, .bytesPerElement: 4, .bytesPerRow: bytesPerRow,
+      .pixelFormat: kCVPixelFormatType_32BGRA,
+    ])
+  else { return nil }
+  let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+    pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+  descriptor.usage = [.shaderRead, .shaderWrite]
+  descriptor.storageMode = metalDevice.hasUnifiedMemory ? .shared : .managed
+  guard let texture = metalDevice.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0)
+  else { return nil }
+  return (surface, texture)
 }
 
 // `QWEBSYPHON_CPU_CAPTURE=1`: capture with the old renderInContext path (CPU, ~10-30 ms per
 // frame on heavy pages) instead of CARenderer. Read once at launch.
 let cpuCapture = appEnvironment("CPU_CAPTURE") == "1"
 
-// Shared GPU downscaler for tile readback
+// Shared GPU downscaler for tiles
 @MainActor private let tileScaler = MPSImageBilinearScale(device: metalDevice)
 
 extension WKWebView {

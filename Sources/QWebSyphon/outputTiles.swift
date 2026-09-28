@@ -209,10 +209,8 @@ struct OutputTile: View {
           .font(.caption)
           .foregroundStyle(.white.opacity(0.6))
       }
-    } else if let cgImage = output.previewImage {
-      Image(decorative: cgImage, scale: 1)
-        .resizable()
-        .aspectRatio(contentMode: .fit)
+    } else if output.hasTile {
+      TileLayerView(tileLayer: output.tileLayer)
         .background {
           if output.transparentBackground {
             CheckerboardBackground()
@@ -229,10 +227,43 @@ struct OutputTile: View {
   }
 }
 
+// Hosts an output's `tileLayer`, which the output updates itself: a new tile costs no SwiftUI
+// update and no CPU image copy. Clicks pass through to the SwiftUI tap/context menu.
+private struct TileLayerView: NSViewRepresentable {
+  let tileLayer: CALayer
+
+  func makeNSView(context: Context) -> TileLayerHostView { TileLayerHostView(tileLayer: tileLayer) }
+  func updateNSView(_ view: TileLayerHostView, context: Context) {}
+}
+
+private final class TileLayerHostView: NSView {
+  private let tileLayer: CALayer
+
+  init(tileLayer: CALayer) {
+    self.tileLayer = tileLayer
+    super.init(frame: .zero)
+    wantsLayer = true
+    // SwiftUI's clipShape doesn't reach into an NSView's layer; matches the tile's rounded clip
+    layer?.cornerRadius = 6
+    layer?.masksToBounds = true
+    layer?.addSublayer(tileLayer)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+  // bounds/position rather than frame: `tileLayer` may carry a flip transform
+  override func layout() {
+    super.layout()
+    tileLayer.bounds = bounds
+    tileLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 // Alpha-transparency indicator behind a transparent-background output's preview image — the
 // standard "this is where the alpha shows" checkerboard. Placed via `.background` on the
-// aspect-fit `Image` in `OutputTile.preview` so it inherits that view's exact frame (the
-// aspect-fit rect), not the tile's own frame, which can be taller/wider when letterboxed.
+// `TileLayerView` in `OutputTile.preview` so it inherits that view's frame.
 private struct CheckerboardBackground: View {
   private let squareSize: CGFloat = 8
 

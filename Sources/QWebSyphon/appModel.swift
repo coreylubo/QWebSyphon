@@ -29,6 +29,9 @@ final class AppModel: ObservableObject {
   private let persistOutputs: Bool
   private var captureTimer: Timer?
   private var tileTimer: Timer?
+  // False while the main window is minimized, hidden or fully covered (main.swift follows its
+  // occlusion state): no tile work then.
+  var tilesVisible = true
   // First output the last tick didn't reach before the deadline; nil when every output was captured
   private var nextCaptureID: UUID?
   // Spike budget rule: past ~12 ms of capture per tick, the pages' own rAF and WebKit commits starve
@@ -175,7 +178,7 @@ final class AppModel: ObservableObject {
 
   // One 60 Hz driver for all outputs, in `.common` mode so capture keeps running during menu
   // tracking and window drags (the old per-view timer ran in the default mode and paused). Plus a
-  // 15 Hz tile refresh for the main window's previews.
+  // 30 Hz tile refresh for the main window's previews.
   func startCapture() {
     guard captureTimer == nil else { return }
     let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
@@ -184,7 +187,7 @@ final class AppModel: ObservableObject {
     RunLoop.main.add(timer, forMode: .common)
     captureTimer = timer
 
-    let tiles = Timer(timeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
+    let tiles = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated { self?.refreshTiles() }
     }
     RunLoop.main.add(tiles, forMode: .common)
@@ -210,6 +213,7 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshTiles() {
+    guard tilesVisible else { return }
     for output in outputs { output.refreshTile(commandQueue: commandQueue) }
   }
 }

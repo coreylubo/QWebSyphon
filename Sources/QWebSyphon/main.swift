@@ -62,6 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var outputHost: OutputHost?
   var statusMenuController: StatusMenuController!
   private var oscPortCancellable: AnyCancellable?
+  private var occlusionObserver: NSObjectProtocol?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
@@ -105,6 +106,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       showSettings: { [weak self] in self?.showSettings() }
     )
 
+    occlusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification, object: mainWindow, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.model.tilesVisible = self.mainWindow.occlusionState.contains(.visible)
+      }
+    }
     model.startCapture()
     oscController.start(port: model.oscPort)
 
