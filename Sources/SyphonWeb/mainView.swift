@@ -72,7 +72,15 @@ struct MainView: View {
               ) {
                 OutputSettingsPopover(
                   model: model, output: output,
-                  outputIndex: (model.outputs.firstIndex(where: { $0.id == output.id }) ?? 0) + 1)
+                  outputIndex: (model.outputs.firstIndex(where: { $0.id == output.id }) ?? 0) + 1,
+                  canDelete: model.outputs.count > 1,
+                  onDelete: {
+                    settingsOutputID = nil
+                    // Popover dismissal and this confirmation both drive presentation state in
+                    // the same run loop; deferring avoids the two fighting over SwiftUI's
+                    // presentation machinery.
+                    DispatchQueue.main.async { outputPendingRemoval = output }
+                  })
               }
             }
           }
@@ -96,11 +104,11 @@ struct MainView: View {
       }
     }
     .confirmationDialog(
-      "Remove \u{201c}\(outputPendingRemoval?.name ?? "")\u{201d}?",
+      "Delete \u{201c}\(outputPendingRemoval?.name ?? "")\u{201d}?",
       isPresented: Binding(
         get: { outputPendingRemoval != nil }, set: { if !$0 { outputPendingRemoval = nil } })
     ) {
-      Button("Remove", role: .destructive) {
+      Button("Delete", role: .destructive) {
         if let output = outputPendingRemoval { model.removeOutput(output.id) }
         outputPendingRemoval = nil
       }

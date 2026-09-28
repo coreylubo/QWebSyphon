@@ -97,7 +97,7 @@ struct OutputTile: View {
       Button("Settings…", action: onSettings)
       Button("Duplicate", action: onDuplicate).disabled(!canDuplicate)
       Divider()
-      Button("Remove…", action: onRemove).disabled(!canRemove)
+      Button("Delete Output…", action: onRemove).disabled(!canRemove)
     }
   }
 
@@ -155,10 +155,14 @@ struct OutputSettingsPopover: View {
   let model: AppModel
   @ObservedObject var output: Output
   let outputIndex: Int
+  let canDelete: Bool
+  let onDelete: () -> Void
 
   var body: some View {
     Form {
-      OutputSettingsSections(model: model, output: output, outputIndex: outputIndex)
+      OutputSettingsSections(
+        model: model, output: output, outputIndex: outputIndex, canDelete: canDelete,
+        onDelete: onDelete)
     }
     .formStyle(.grouped)
     .frame(width: 360)
@@ -182,6 +186,8 @@ struct OutputSettingsSections: View {
   let model: AppModel
   @ObservedObject var output: Output
   let outputIndex: Int
+  let canDelete: Bool
+  let onDelete: () -> Void
 
   @State private var resolutionChoice: ResolutionChoice
   @State private var widthText: String
@@ -190,10 +196,12 @@ struct OutputSettingsSections: View {
   @State private var syphonNameText: String
   @State private var syphonNameError: String?
 
-  init(model: AppModel, output: Output, outputIndex: Int) {
+  init(model: AppModel, output: Output, outputIndex: Int, canDelete: Bool, onDelete: @escaping () -> Void) {
     self.model = model
     self.output = output
     self.outputIndex = outputIndex
+    self.canDelete = canDelete
+    self.onDelete = onDelete
     _resolutionChoice = State(
       initialValue: output.customSize == nil ? .preset(output.resolution) : .custom)
     let size = output.pixelSize
@@ -267,6 +275,11 @@ struct OutputSettingsSections: View {
       )
       .font(.caption)
       .foregroundStyle(.secondary)
+    }
+
+    Section("Danger Zone") {
+      Button("Delete Output…", role: .destructive, action: onDelete)
+        .disabled(!canDelete)
     }
   }
 
