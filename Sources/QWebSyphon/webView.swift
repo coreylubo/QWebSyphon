@@ -218,9 +218,10 @@ final class Output: ObservableObject, Identifiable {
   // GPU path: composites the web view's layer tree straight into `texture`. Bound to one texture,
   // so recreated (lazily, by captureFrame) whenever initMetal replaces it.
   private var renderer: CARenderer?
-  // GPU tile: `texture` downscaled on the GPU into one of two IOSurface-backed textures, shown in
-  // `tileLayer` once that command buffer completes. Double-buffered so the surface on screen is
-  // never written. `tileGeneration` is bumped by `resetTile` (initMetal, disable) so a completion
+  // GPU tile: `texture` downscaled on the GPU into one of three IOSurface-backed textures, shown
+  // in `tileLayer` once that command buffer completes. Rotated so the next write targets the
+  // surface shown two swaps ago, never the one on screen or the one just replaced (the window
+  // server may still be compositing it). `tileGeneration` is bumped by `resetTile` (initMetal, disable) so a completion
   // from before it is dropped.
   private var tileSurfaces: [(surface: IOSurface, texture: MTLTexture)] = []
   private var shownTileSurface: Int?
@@ -261,7 +262,7 @@ final class Output: ObservableObject, Identifiable {
     let tileWidth = min(pixelWidth, tileImageMaxWidth)
     let tileHeight = max(1, pixelHeight * tileWidth / pixelWidth)
     tileSurfaces =
-      cpuCapture ? [] : (0..<2).compactMap { _ in makeTileSurface(width: tileWidth, height: tileHeight) }
+      cpuCapture ? [] : (0..<3).compactMap { _ in makeTileSurface(width: tileWidth, height: tileHeight) }
   }
 
   private func resetTile() {
@@ -358,7 +359,7 @@ final class Output: ObservableObject, Identifiable {
       showTile(makeTileImage(graphicsContext))
       return
     }
-    let target = shownTileSurface == 0 ? 1 : 0
+    let target = ((shownTileSurface ?? -1) + 1) % max(tileSurfaces.count, 1)
     guard !tileInFlight, let texture, tileSurfaces.indices.contains(target),
       let commandBuffer = commandQueue.makeCommandBuffer()
     else { return }
@@ -367,6 +368,13 @@ final class Output: ObservableObject, Identifiable {
     tileScaler.encode(
       commandBuffer: commandBuffer, sourceTexture: texture,
       destinationTexture: tileSurfaces[target].texture)
+    // `.managed` (discrete GPU): copy the GPU write back to the IOSurface the window server reads.
+    if tileSurfaces[target].texture.storageMode == .managed,
+      let blit = commandBuffer.makeBlitCommandEncoder()
+    {
+      blit.synchronize(resource: tileSurfaces[target].texture)
+      blit.endEncoding()
+    }
     let generation = tileGeneration
     commandBuffer.addCompletedHandler { [weak self] _ in
       DispatchQueue.main.async {
