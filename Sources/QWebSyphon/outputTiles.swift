@@ -216,14 +216,35 @@ struct OutputTile: View {
             CheckerboardBackground()
           }
         }
+        .overlay(alignment: .topLeading) {
+          if isPaused {
+            Text("Paused: no clients")
+              .font(.caption2)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 2)
+              .background(.black.opacity(0.6), in: Capsule())
+              .foregroundStyle(.white.opacity(0.8))
+              .padding(4)
+          }
+        }
     } else {
       ZStack {
         Rectangle().fill(Color.black)
-        Text(output.loadError != nil ? "Failed" : "Loading…")
+        Text(placeholderText)
           .font(.caption)
           .foregroundStyle(.white.opacity(0.6))
       }
     }
+  }
+
+  // Capture is skipped while no Syphon client is connected unless "capture without clients" is
+  // on (`Output.captureFrame`), so no tile arrives even though the page has loaded.
+  private var isPaused: Bool { !output.captureWithoutClients && !stats.hasClients }
+
+  private var placeholderText: String {
+    if output.loadError != nil { return "Failed" }
+    if !output.loading && isPaused { return "Paused: no Syphon clients" }
+    return "Loading…"
   }
 }
 
