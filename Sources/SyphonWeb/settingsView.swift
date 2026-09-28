@@ -9,14 +9,27 @@ import SwiftUI
 struct SettingsView: View {
   @ObservedObject var model: AppModel
   @ObservedObject var oscController: OSCController
+  // Applies the toggle live (activation policy) and persists it; see AppDelegate.setDockIconVisible.
+  let onDockIconChange: (Bool) -> Void
 
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
   @State private var oscCommands: [OSCCommandInfo] = []
+  @State private var showDockIcon: Bool = true
 
   var body: some View {
     Form {
+      Section("App") {
+        Toggle("Show in Dock", isOn: $showDockIcon)
+          .onChange(of: showDockIcon) { _, newValue in onDockIconChange(newValue) }
+        Text(
+          "Per profile. Off: SyphonWeb lives in the menu bar only, and closing the window hides it instead of quitting."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+
       Section("Instances") {
         Text("Profile: \(profileName ?? "default")")
         Text(
@@ -65,6 +78,7 @@ struct SettingsView: View {
       portText = String(model.oscPort)
       bookmarks = Bookmark.getAll()
       oscCommands = oscCommandReference(outputs: model.outputs)
+      showDockIcon = showDockIconEnabled()
     }
     // The window is retained, so onAppear runs once; keep the command list current
     .onReceive(bookmarksDidChangePublisher) { _ in

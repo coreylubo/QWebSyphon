@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # Dependency sources only (not the compiled build), keyed on Package.resolved so a lock
+      # change invalidates the cache instead of serving stale checkouts.
+      - name: Cache SwiftPM dependency checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+          key: ${{ runner.os }}-${{ runner.arch }}-spm-${{ hashFiles('Package.resolved') }}
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: swift test

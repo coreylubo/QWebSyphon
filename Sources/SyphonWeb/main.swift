@@ -10,13 +10,6 @@ var activity: NSObjectProtocol?
 activity = ProcessInfo().beginActivity(
   options: ProcessInfo.ActivityOptions.userInitiated, reason: "No Napping!")
 
-#if DEBUG
-  checkBookmarkLabelValidation()
-  checkOutputsMigration()
-  checkOutputsModel()
-  checkOSCRoutes()
-#endif
-
 // Init metal and SQLite. The Syphon server itself is created per-instance in
 // AppDelegate once the final name is known (see Bug 1: creating it here with a placeholder
 // name and renaming afterwards means QLab's initial Syphon announce carries the wrong name).
@@ -26,8 +19,27 @@ let metalDevice: MTLDevice = MTLCreateSystemDefaultDevice()!
 appLog("Opening SQLite database connection...")
 nonisolated(unsafe) let databaseConn = initDatabase()
 
+// Whether the Dock icon should be shown, persisted per profile in `appDefaults` (absent = true).
+// Read at launch to set the initial activation policy, and live-toggled from Settings' "App"
+// section (`AppDelegate.setDockIconVisible`).
+let showDockIconDefaultsKey = "showDockIcon"
+
+func showDockIconEnabled(defaults: UserDefaults = appDefaults) -> Bool {
+  defaults.object(forKey: showDockIconDefaultsKey) == nil ? true : defaults.bool(forKey: showDockIconDefaultsKey)
+}
+
 // AppKit Stuff
 class WindowDelegate: NSObject, NSWindowDelegate {
+
+  // With the Dock icon hidden, the app has no other way back on screen than the menu bar (no Dock
+  // icon, no main menu), so closing the window just hides it — outputs and OSC keep running, and
+  // "Show Window" in the status menu brings it back. With the Dock icon shown, unchanged: closing
+  // quits (windowWillClose below).
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    guard !showDockIconEnabled() else { return true }
+    sender.orderOut(nil)
+    return false
+  }
 
   func windowWillClose(_ notification: Notification) {
     NSApplication.shared.terminate(0)
@@ -45,6 +57,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var oscController: OSCController!
   var settingsWindow: NSWindow?
   var outputHost: OutputHost?
+  var statusMenuController: StatusMenuController!
   private var oscPortCancellable: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -83,11 +96,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     setupAppMenu()
 
+    statusMenuController = StatusMenuController(
+      model: model, oscController: oscController,
+      showWindow: { [weak self] outputID in self?.showMainWindow(selecting: outputID) },
+      showSettings: { [weak self] in self?.showSettings() }
+    )
+
     model.startCapture()
     oscController.start(port: model.oscPort)
 
-    NSApp.setActivationPolicy(.regular)
+    // Accessory mode has no Dock icon and no main menu (⌘, / ⌘Q vanish); the status menu's
+    // Settings…/Quit items are the only way back in that mode, and must work on their own.
+    NSApp.setActivationPolicy(showDockIconEnabled() ? .regular : .accessory)
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  // Brings the main window to front and, if `outputID` is given (a status-menu row click),
+  // selects that output first. Works the same whether the app is `.regular` or `.accessory`.
+  func showMainWindow(selecting outputID: UUID? = nil) {
+    if let outputID { model.selectedOutputID = outputID }
+    mainWindow.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  // Settings' "App" section toggle. Persists, then applies live; switching to `.accessory` still
+  // needs an explicit re-activate afterwards or the app can drop out of the foreground with the
+  // main window behind other apps.
+  func setDockIconVisible(_ visible: Bool) {
+    appDefaults.set(visible, forKey: showDockIconDefaultsKey)
+    NSApp.setActivationPolicy(visible ? .regular : .accessory)
+    if !visible {
+      NSApp.activate(ignoringOtherApps: true)
+    }
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -170,7 +210,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
 
-    let settingsViewInst = SettingsView(model: model, oscController: oscController)
+    let settingsViewInst = SettingsView(
+      model: model, oscController: oscController,
+      onDockIconChange: { [weak self] visible in self?.setDockIconVisible(visible) })
     let hostingView = NSHostingView(rootView: settingsViewInst)
 
     let window = NSWindow(
