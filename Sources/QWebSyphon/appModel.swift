@@ -210,9 +210,6 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshTiles() {
-    for output in outputs where output.tileDirty {
-      output.tileDirty = false
-      output.previewImage = output.graphicsContext.flatMap(makeTileImage)
-    }
+    for output in outputs { output.refreshTile(commandQueue: commandQueue) }
   }
 }

@@ -33,11 +33,10 @@ public func liveBookmarkIDs(
   return result
 }
 
-// Small upright copy of a capture context for a tile. The capture buffer is bottom-up (row 0 is
-// the page's bottom, as Syphon expects), so it is drawn flipped. Downscaled rather than kept as a
-// full-size `makeImage()`: a full-size image alive at the next capture makes that capture copy
-// the whole buffer (copy-on-write) and SwiftUI upload it; 1080p + 720p dropped from 60 to 45 fps.
-// The snapshot here is released before the next capture, so it never copies.
+// Small upright copy of a capture-layout buffer for a tile. The buffer is bottom-up (row 0 is the
+// page's bottom, as Syphon expects), so it is drawn flipped, and capped at `tileImageMaxWidth`.
+// The app passes the GPU-downscaled readback of the published texture (`Output.refreshTile`),
+// which is already at most that wide.
 public func makeTileImage(_ context: CGContext) -> CGImage? {
   guard let snapshot = context.makeImage() else { return nil }
   let width = min(context.width, tileImageMaxWidth)
