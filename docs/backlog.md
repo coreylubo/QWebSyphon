@@ -23,3 +23,10 @@ field in the output gear popover, or above the tiles, wired to `Output.navigate(
 Favorites aren't a separate thing. They're bookmarks with `favorite = true`, shown in a
 "Favorites" section above "Bookmarks" in the sidebar. Question: keep the pinned section, or drop
 the flag and rely on bookmark ordering and OSC labels?
+
+## Menu bar icon: `record.circle` with a status-colored center
+
+User request (2026-09-27): the status item icon should be the SF Symbol `record.circle`, with its
+inner dot filled in the status color (green/orange/red) instead of the current symbol plus a
+separate dot. The outer ring keeps following the menu bar's appearance. The status item exists
+since PR #4 (`statusMenu.swift`, icon adapted from the Prompter's `statusImage`).
