@@ -215,8 +215,9 @@ class Bookmark: Identifiable, Hashable {
 }
 
 extension Notification.Name {
-  // Posted after any bookmark insert, update, favorite toggle or delete
-  static let bookmarksDidChange = Notification.Name("QWebSyphonBookmarksDidChange")
+  // Posted after any bookmark insert, update, favorite toggle or delete. Keeps its pre-rename
+  // name: old SyphonWeb processes share the same database, so both versions must hear each other.
+  static let bookmarksDidChange = Notification.Name("SyphonWebBookmarksDidChange")
 }
 
 // Bookmarks live in one database shared by every --profile instance, so the change is announced
