@@ -197,12 +197,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
       width: dotDiameter, height: dotDiameter)
 
     let image = NSImage(size: size, flipped: false) { _ in
-      // Tint the template glyph with the menu bar's foreground colour: fill its rect, then keep
-      // only the pixels the glyph covers (.destinationIn). Filling only `glyphRect` matters:
-      // .destinationIn doesn't touch pixels outside the rect it draws into.
+      // Tint the template glyph with the menu bar's foreground colour: draw it, then recolour only
+      // the pixels it covers (.sourceIn), keeping its alpha. Filling first and masking with
+      // .destinationIn left a hairline box: glyphRect sits at a fractional y, so the fill's
+      // antialiased edge survived the mask. With .sourceIn that edge lands on clear pixels and
+      // stays clear. A single-colour palette configuration would avoid compositing but paints the
+      // symbol's translucent layers solid.
+      symbol.draw(in: glyphRect)
       NSColor.labelColor.set()
-      glyphRect.fill()
-      symbol.draw(in: glyphRect, from: .zero, operation: .destinationIn, fraction: 1.0)
+      glyphRect.fill(using: .sourceIn)
 
       // Knock a small clear ring out of the glyph where the dot will sit, so the dot reads
       // against the glyph instead of touching its tinted pixels.
