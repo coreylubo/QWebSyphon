@@ -236,6 +236,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     output.loading = webView.isLoading
     appLog("Done loading URL: \(output.url)")
+    resyncAcceleratedAnimations()
   }
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -251,6 +252,26 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     output.loading = webView.isLoading
     output.loadError = error.localizedDescription
     appLog("Failed provisional loading URL: \(output.url) error: \(error)")
+  }
+
+  // WebKit bug, measured (in a plain on-screen WKWebView too, so not the capture path): for half
+  // or more of documents loaded into a fresh web content process (launch, cross-site
+  // navigation), the Core Animation copies of accelerated animations (transform, opacity) on
+  // elements present at load begin ~100 ms later than the page's timeline says, for the element's
+  // lifetime. Main-thread animated properties (width, border-radius, clip-path) then run ~100 ms
+  // ahead of the accelerated ones on the same element: shapes and masks disagree mid-animation.
+  // Elements inserted later are unaffected. A document-wide style invalidation after load
+  // re-commits the animations in sync (0/16 launches desynced, vs 33/40 without). Mechanism
+  // unknown; if WebKit fixes it this is one extra style recalc per load. Runs in an isolated
+  // content world; the page could only see an empty stylesheet for one frame.
+  private func resyncAcceleratedAnimations() {
+    let script = """
+      const sheet = new CSSStyleSheet();
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+      """
+    webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .defaultClient) { _ in }
   }
 
   // A cross-site navigation swaps WebKit's WebContent process; the new process starts with the
