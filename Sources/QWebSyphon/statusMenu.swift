@@ -169,37 +169,49 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
   }
 
-  // `rectangle.on.rectangle` tinted to the menu bar foreground, with a small filled circle at the
+  // `macwindow` tinted to the menu bar foreground, with a small filled circle at the
   // bottom-trailing corner for the status colour. See the type comment for the composition
   // technique (adapted from Prompter's `statusImage`); the dot placement itself is this icon's own
   // corner-badge position, not ported from that file's flood-fill measurement (which was specific
-  // to `display.2`).
+  // to `display.2`). The canvas is padded on the bottom and trailing edges by the dot's radius so
+  // the badge sits fully on-canvas instead of being clipped by the glyph's own bounds.
   private static func statusImage(color: NSColor) -> NSImage {
     let height: CGFloat = 18
     guard
       let symbol = NSImage(
-        systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "QWebSyphon")
+        systemSymbolName: "macwindow", accessibilityDescription: "QWebSyphon")
     else {
       return NSImage(size: NSSize(width: height, height: height))
     }
     symbol.isTemplate = true
     let aspect = symbol.size.height > 0 ? symbol.size.width / symbol.size.height : 1
-    let size = NSSize(width: (height * aspect).rounded(), height: height)
+    let glyphWidth = (height * aspect).rounded()
 
-    let image = NSImage(size: size, flipped: false) { rect in
+    let dotDiameter = height * 0.4
+    let overhang = dotDiameter / 2
+    let size = NSSize(width: glyphWidth + overhang, height: height + overhang)
+    let glyphRect = NSRect(x: 0, y: overhang, width: glyphWidth, height: height)
+    // Dot centred on the glyph's bottom-trailing corner; canvas padding above makes it tangent
+    // to (not past) the image edges.
+    let dotRect = NSRect(
+      x: glyphWidth - overhang, y: 0, width: dotDiameter, height: dotDiameter)
+
+    let image = NSImage(size: size, flipped: false) { _ in
       // Tint the template glyph with the menu bar's foreground colour: fill with it, then keep
       // only the pixels the glyph itself covers (.destinationIn).
       NSColor.labelColor.set()
-      rect.fill()
-      symbol.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1.0)
+      NSRect(origin: .zero, size: size).fill()
+      symbol.draw(in: glyphRect, from: .zero, operation: .destinationIn, fraction: 1.0)
 
-      let dotDiameter = rect.height * 0.4
-      let dotRect = NSRect(
-        x: rect.width - dotDiameter * 0.8,
-        y: -dotDiameter * 0.1,
-        width: dotDiameter,
-        height: dotDiameter
-      )
+      // Knock a small clear ring out of the glyph where the dot will sit, so the dot reads
+      // against the glyph instead of touching its tinted pixels.
+      let gap: CGFloat = 1.2
+      let ringRect = dotRect.insetBy(dx: -gap, dy: -gap)
+      NSColor.black.setFill()
+      NSGraphicsContext.current?.compositingOperation = .destinationOut
+      NSBezierPath(ovalIn: ringRect).fill()
+      NSGraphicsContext.current?.compositingOperation = .sourceOver
+
       color.setFill()
       NSBezierPath(ovalIn: dotRect).fill()
       return true
