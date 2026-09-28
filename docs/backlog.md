@@ -30,3 +30,19 @@ User request (2026-09-27): the status item icon should be the SF Symbol `record.
 inner dot filled in the status color (green/orange/red) instead of the current symbol plus a
 separate dot. The outer ring keeps following the menu bar's appearance. The status item exists
 since PR #4 (`statusMenu.swift`, icon adapted from the Prompter's `statusImage`).
+
+## Page drawn at the wrong size after a backing-scale change
+
+Found while testing GPU capture (2026-09-27). After the output's backing scale changes (e.g.
+moving the main window between a 2x and a 1x screen), the page sometimes lays out at the wrong
+size and covers only a quarter of the frame. About half of repeated runs showed it, on the GPU
+and CPU capture paths alike. The layer tree itself had the wrong size, so it is WebKit's viewport,
+probably the viewport-nudge race in `OutputWebViewController.applySize`, not capture. It was
+reproduced only by setting `backingScale` directly; a real screen move is untested.
+
+## `<video>` is blank in outputs
+
+WebKit hosts video outside the app process, so neither capture path (CARenderer or
+renderInContext) sees it. Pages that are mostly video won't work until capture reads the window
+server's composited result instead (e.g. ScreenCaptureKit, which needs Screen Recording
+permission).
