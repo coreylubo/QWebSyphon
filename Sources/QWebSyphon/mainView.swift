@@ -55,6 +55,7 @@ struct MainView: View {
                 output: output, stats: output.stats, isSelected: output.id == model.selectedOutputID,
                 canDuplicate: model.outputs.count < maxOutputs, canRemove: model.outputs.count > 1,
                 playingName: playingName(for: output),
+                bookmarks: orderedBookmarksForLive,
                 onSelect: { model.selectedOutputID = output.id },
                 onSettings: { settingsOutputID = output.id },
                 onDuplicate: { model.duplicateOutput(output.id) },

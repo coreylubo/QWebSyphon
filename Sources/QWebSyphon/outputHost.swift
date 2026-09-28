@@ -124,6 +124,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     super.init()
 
     webView.navigationDelegate = self
+    webView.muteAllAudio()
     container.addSubview(webView)  // frame origin (0,0): all outputs stacked
     output.webView = webView
 
@@ -236,6 +237,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     output.loading = webView.isLoading
     appLog("Done loading URL: \(output.url)")
+    resyncAcceleratedAnimations()
   }
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -253,10 +255,47 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     appLog("Failed provisional loading URL: \(output.url) error: \(error)")
   }
 
+  // WebKit bug, measured (in a plain on-screen WKWebView too, so not the capture path): for half
+  // or more of documents loaded into a fresh web content process (launch, cross-site
+  // navigation), the Core Animation copies of accelerated animations (transform, opacity) on
+  // elements present at load begin ~100 ms later than the page's timeline says, for the element's
+  // lifetime. Main-thread animated properties (width, border-radius, clip-path) then run ~100 ms
+  // ahead of the accelerated ones on the same element: shapes and masks disagree mid-animation.
+  // Elements inserted later are unaffected. A document-wide style invalidation after load
+  // re-commits the animations in sync (0/16 launches desynced, vs 33/40 without). Mechanism
+  // unknown; if WebKit fixes it this is one extra style recalc per load. Runs in an isolated
+  // content world; the page could only see an empty stylesheet for one frame.
+  private func resyncAcceleratedAnimations() {
+    let script = """
+      const sheet = new CSSStyleSheet();
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+      """
+    webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .defaultClient) { _ in }
+  }
+
   // A cross-site navigation swaps WebKit's WebContent process; the new process starts with the
   // layout-mode-2 viewport unset, so vw/vh resolve to 0 until the view is resized. Nudge on every
   // commit, not just on size changes, so this covers the process-swap case too.
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
     nudgeViewport(size: webView.frame.size)
+    webView.muteAllAudio()  // again after a process swap, in case the new process doesn't inherit it
+  }
+}
+
+extension WKWebView {
+  // Outputs are video only (Syphon carries no audio): page audio would come out of this Mac's
+  // speakers mid-show. Private `_setPageMuted:` with `_WKMediaAudioMuted` (1) mutes everything the
+  // page plays (media elements and Web Audio) without stopping playback, so video still renders.
+  // No public macOS API does this; if the SPI disappears, audio is left as is (logged).
+  func muteAllAudio() {
+    let selector = NSSelectorFromString("_setPageMuted:")
+    guard responds(to: selector) else {
+      appLog("WKWebView has no _setPageMuted:, page audio is not muted")
+      return
+    }
+    typealias SetMuted = @convention(c) (AnyObject, Selector, UInt) -> Void
+    unsafeBitCast(method(for: selector), to: SetMuted.self)(self, selector, 1)
   }
 }

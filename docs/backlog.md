@@ -46,3 +46,9 @@ WebKit hosts video outside the app process, so neither capture path (CARenderer 
 renderInContext) sees it. Pages that are mostly video won't work until capture reads the window
 server's composited result instead (e.g. ScreenCaptureKit, which needs Screen Recording
 permission).
+
+## Notifications inside the checkpoint page
+
+Render the purchase notifications inside the checkpoint page itself, so QLab plays one Syphon
+output instead of compositing a second 60 fps notifications output on top. Two outputs at 60 fps
+cost roughly twice the WebKit and capture CPU. (User note, 2026-09-27.)

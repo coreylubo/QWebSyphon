@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import QWebSyphonCore
 
 // Global settings only (phase 3, cluster 3): instances, OSC port, and the full OSC command
 // reference (from `oscCommandReference(outputs:)`, cluster 2/oscServer.swift) plus per-bookmark
@@ -15,7 +16,7 @@ struct SettingsView: View {
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
-  @State private var oscCommands: [OSCCommandInfo] = []
+  @State private var oscReference = OSCReference(generic: [], groups: [], footnote: nil)
   @State private var showDockIcon: Bool = true
 
   var body: some View {
@@ -56,18 +57,18 @@ struct SettingsView: View {
       }
 
       Section("OSC Commands") {
-        ForEach(oscCommands) { command in
-          VStack(alignment: .leading, spacing: 1) {
-            Text("\(command.id) \(command.args)").font(.system(.body, design: .monospaced))
-              .textSelection(.enabled)
-            Text(command.description).font(.caption).foregroundStyle(.secondary)
-          }
+        ForEach(oscReference.generic) { command in
+          commandRow(command)
         }
-        ForEach(bookmarks.filter { $0.label != nil }) { bookmark in
-          VStack(alignment: .leading, spacing: 1) {
-            Text("/syphon/bookmark/\(bookmark.label!)").font(.system(.body, design: .monospaced))
-              .textSelection(.enabled)
-            Text("Load \"\(bookmark.name)\"").font(.caption).foregroundStyle(.secondary)
+        if let footnote = oscReference.footnote {
+          commandRow(footnote)
+        }
+      }
+
+      ForEach(oscReference.groups) { group in
+        Section(group.outputName) {
+          ForEach(group.rows) { row in
+            commandRow(row)
           }
         }
       }
@@ -77,23 +78,42 @@ struct SettingsView: View {
     .onAppear {
       portText = String(model.oscPort)
       bookmarks = Bookmark.getAll()
-      oscCommands = oscCommandReference(outputs: model.outputs)
+      refreshOSCReference()
       showDockIcon = showDockIconEnabled()
     }
     // The window is retained, so onAppear runs once; keep the command list current
     .onReceive(bookmarksDidChangePublisher) { _ in
       bookmarks = Bookmark.getAll()
+      refreshOSCReference()
     }
-    // Outputs added/removed/renamed while Settings is open (name feeds the per-output example
-    // rows and the grandfathered-name index fallback): re-render via `model` (add/remove) and
+    // Outputs added/removed/renamed while Settings is open (name feeds each output's group
+    // heading and the grandfathered-name index fallback): re-render via `model` (add/remove) and
     // resubscribe to each current output's `$name`. `.receive(on:)` defers past `@Published`'s
     // willSet-time emission so the read below sees the NEW name, not the old one.
     .onReceive(
       Publishers.MergeMany(model.outputs.map { $0.$name.map { _ in () }.eraseToAnyPublisher() })
         .receive(on: DispatchQueue.main)
     ) { _ in
-      oscCommands = oscCommandReference(outputs: model.outputs)
+      refreshOSCReference()
     }
+  }
+
+  @ViewBuilder
+  private func commandRow(_ command: OSCCommandRow) -> some View {
+    VStack(alignment: .leading, spacing: 1) {
+      Text(command.args.isEmpty ? command.id : "\(command.id) \(command.args)")
+        .font(.system(.body, design: .monospaced))
+        .textSelection(.enabled)
+      Text(command.description).font(.caption).foregroundStyle(.secondary)
+    }
+  }
+
+  private func refreshOSCReference() {
+    let labelled = bookmarks.compactMap { bookmark in
+      bookmark.label.map { (label: $0, name: bookmark.name) }
+    }
+    oscReference = oscCommandReference(
+      outputs: model.outputs, legacyOutput: model.legacyOutput, labelledBookmarks: labelled)
   }
 
   private func applyPort() {

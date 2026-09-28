@@ -13,7 +13,8 @@ func parseBookmarkDragPayload(_ string: String) -> Int64? {
 }
 
 // One tile in the output grid: preview image (or a placeholder while loading/failed), name, fps
-// and client dot (styled like StatusBar's), plus the playing bookmark's name (or the URL host).
+// and client dot (styled like StatusBar's), plus an editable URL/bookmark row: shows the playing
+// bookmark's name (or the full URL) and a menu to jump to another bookmark or type a URL directly.
 // `stats` is observed separately from `output` because `OutputStats` is its own `ObservableObject`
 // (see statusBar.swift) — `Output.stats` itself isn't `@Published`, so fps/client updates wouldn't
 // otherwise trigger a re-render.
@@ -29,8 +30,10 @@ struct OutputTile: View {
   let canDuplicate: Bool
   let canRemove: Bool
   // Name of the bookmark currently live in this output (from the sidebar's live map), or nil if
-  // none matched — the caller falls back to the URL host.
+  // none matched — the URL row falls back to the full URL.
   let playingName: String?
+  // Sidebar order (favorites, then the rest) for the URL row's "load a bookmark" menu.
+  let bookmarks: [Bookmark]
   let onSelect: () -> Void
   let onSettings: () -> Void
   let onDuplicate: () -> Void
@@ -38,50 +41,79 @@ struct OutputTile: View {
   let onDropBookmark: (Int64) -> Void
 
   @State private var isDropTargeted = false
+  // Text shown/edited in the URL row. Starts as the display text (bookmark name or URL); on focus
+  // it switches to the full URL for editing, and reverts on blur/Escape unless Return was pressed.
+  @State private var urlFieldText: String
+  @FocusState private var isURLFieldFocused: Bool
+
+  init(
+    output: Output, stats: OutputStats, isSelected: Bool, canDuplicate: Bool, canRemove: Bool,
+    playingName: String?, bookmarks: [Bookmark], onSelect: @escaping () -> Void,
+    onSettings: @escaping () -> Void, onDuplicate: @escaping () -> Void,
+    onRemove: @escaping () -> Void, onDropBookmark: @escaping (Int64) -> Void
+  ) {
+    self.output = output
+    self.stats = stats
+    self.isSelected = isSelected
+    self.canDuplicate = canDuplicate
+    self.canRemove = canRemove
+    self.playingName = playingName
+    self.bookmarks = bookmarks
+    self.onSelect = onSelect
+    self.onSettings = onSettings
+    self.onDuplicate = onDuplicate
+    self.onRemove = onRemove
+    self.onDropBookmark = onDropBookmark
+    _urlFieldText = State(initialValue: playingName ?? output.url.absoluteString)
+  }
+
+  // Bookmark name if playing one, else the full URL — what the field shows while not focused.
+  private var displayText: String { playingName ?? output.url.absoluteString }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      preview
-        .aspectRatio(output.pixelSize.width / output.pixelSize.height, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(
-          RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3))
+      // Tap-to-select only lives on the preview + name row — the URL row below has its own
+      // clickable field/menu, and a tap gesture spanning the whole card would swallow their clicks.
+      Group {
+        preview
+          .aspectRatio(output.pixelSize.width / output.pixelSize.height, contentMode: .fit)
+          .clipShape(RoundedRectangle(cornerRadius: 6))
+          .overlay(
+            RoundedRectangle(cornerRadius: 6)
+              .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3))
 
-      HStack(spacing: 6) {
-        if output.enabled {
-          Circle()
-            .fill(OutputStatusStyle.clientColor(hasClients: stats.hasClients))
-            .frame(width: 6, height: 6)
-        }
-        Text(output.name)
-          .font(.caption)
-          .fontWeight(isSelected ? .bold : .regular)
-          .lineLimit(1)
-        Spacer()
-        if output.enabled {
-          Text(output.loading ? "— fps" : "\(stats.fps) fps")
+        HStack(spacing: 6) {
+          if output.enabled {
+            Circle()
+              .fill(OutputStatusStyle.clientColor(hasClients: stats.hasClients))
+              .frame(width: 6, height: 6)
+          }
+          Text(output.name)
             .font(.caption)
-            .monospacedDigit()
-            .foregroundStyle(OutputStatusStyle.fpsColor(fps: stats.fps, loading: output.loading))
+            .fontWeight(isSelected ? .bold : .regular)
+            .lineLimit(1)
+          Spacer()
+          if output.enabled {
+            Text(output.loading ? "— fps" : "\(stats.fps) fps")
+              .font(.caption)
+              .monospacedDigit()
+              .foregroundStyle(OutputStatusStyle.fpsColor(fps: stats.fps, loading: output.loading))
+          }
+          Button(action: onSettings) {
+            Image(systemName: "gearshape")
+          }
+          .buttonStyle(.plain)
+          .help("Output settings")
         }
-        Button(action: onSettings) {
-          Image(systemName: "gearshape")
-        }
-        .buttonStyle(.plain)
-        .help("Output settings")
       }
+      .contentShape(Rectangle())
+      .onTapGesture(perform: onSelect)
 
-      Text(playingName ?? output.url.host ?? output.url.absoluteString)
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+      urlRow
     }
     .padding(6)
     .background(Color(nsColor: .underPageBackgroundColor))
     .cornerRadius(8)
-    .contentShape(Rectangle())
-    .onTapGesture(perform: onSelect)
     .overlay(
       RoundedRectangle(cornerRadius: 8)
         .strokeBorder(Color.accentColor, lineWidth: 3)
@@ -108,6 +140,67 @@ struct OutputTile: View {
     }
   }
 
+  // Editable URL/bookmark row: a text field (bookmark name or URL, truncating; full URL while
+  // focused) plus a menu to jump to another bookmark. Loading a URL into a disabled output only
+  // stores it (`Output.navigate`/`open(bookmark:)` don't check `enabled`), so both stay enabled.
+  private var urlRow: some View {
+    HStack(spacing: 4) {
+      TextField("URL", text: $urlFieldText)
+        .textFieldStyle(.plain)
+        .font(.caption2)
+        .foregroundStyle(isURLFieldFocused ? .primary : .secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .focused($isURLFieldFocused)
+        .onSubmit {
+          output.navigate(to: urlFieldText)
+          isURLFieldFocused = false
+        }
+        .onExitCommand {
+          urlFieldText = displayText
+          isURLFieldFocused = false
+        }
+        .onChange(of: isURLFieldFocused) { _, focused in
+          if focused {
+            urlFieldText = output.url.absoluteString
+            onSelect()
+          } else {
+            urlFieldText = displayText
+          }
+        }
+        .onChange(of: output.url) { _, _ in
+          if !isURLFieldFocused { urlFieldText = displayText }
+        }
+        .onChange(of: playingName) { _, _ in
+          if !isURLFieldFocused { urlFieldText = displayText }
+        }
+
+      Menu {
+        if bookmarks.isEmpty {
+          Button("No bookmarks") {}.disabled(true)
+        } else {
+          ForEach(bookmarks) { bookmark in
+            Button {
+              onDropBookmark(bookmark.id)
+            } label: {
+              if bookmark.id == output.bookmarkID {
+                Label(bookmark.name, systemImage: "checkmark")
+              } else {
+                Text(bookmark.name)
+              }
+            }
+          }
+        }
+      } label: {
+        Image(systemName: "bookmark")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Load bookmark")
+    }
+  }
+
   @ViewBuilder private var preview: some View {
     if !output.enabled {
       ZStack {
@@ -116,30 +209,82 @@ struct OutputTile: View {
           .font(.caption)
           .foregroundStyle(.white.opacity(0.6))
       }
-    } else if let cgImage = output.previewImage {
-      Image(decorative: cgImage, scale: 1)
-        .resizable()
-        .aspectRatio(contentMode: .fit)
+    } else if output.hasTile {
+      TileLayerView(tileLayer: output.tileLayer)
         .background {
           if output.transparentBackground {
             CheckerboardBackground()
           }
         }
+        .overlay(alignment: .topLeading) {
+          if isPaused {
+            Text("Paused: no clients")
+              .font(.caption2)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 2)
+              .background(.black.opacity(0.6), in: Capsule())
+              .foregroundStyle(.white.opacity(0.8))
+              .padding(4)
+          }
+        }
     } else {
       ZStack {
         Rectangle().fill(Color.black)
-        Text(output.loadError != nil ? "Failed" : "Loading…")
+        Text(placeholderText)
           .font(.caption)
           .foregroundStyle(.white.opacity(0.6))
       }
     }
   }
+
+  // Capture is skipped while no Syphon client is connected unless "capture without clients" is
+  // on (`Output.captureFrame`), so no tile arrives even though the page has loaded.
+  private var isPaused: Bool { !output.captureWithoutClients && !stats.hasClients }
+
+  private var placeholderText: String {
+    if output.loadError != nil { return "Failed" }
+    if !output.loading && isPaused { return "Paused: no Syphon clients" }
+    return "Loading…"
+  }
+}
+
+// Hosts an output's `tileLayer`, which the output updates itself: a new tile costs no SwiftUI
+// update and no CPU image copy. Clicks pass through to the SwiftUI tap/context menu.
+private struct TileLayerView: NSViewRepresentable {
+  let tileLayer: CALayer
+
+  func makeNSView(context: Context) -> TileLayerHostView { TileLayerHostView(tileLayer: tileLayer) }
+  func updateNSView(_ view: TileLayerHostView, context: Context) {}
+}
+
+private final class TileLayerHostView: NSView {
+  private let tileLayer: CALayer
+
+  init(tileLayer: CALayer) {
+    self.tileLayer = tileLayer
+    super.init(frame: .zero)
+    wantsLayer = true
+    // SwiftUI's clipShape doesn't reach into an NSView's layer; matches the tile's rounded clip
+    layer?.cornerRadius = 6
+    layer?.masksToBounds = true
+    layer?.addSublayer(tileLayer)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+  // bounds/position rather than frame: `tileLayer` may carry a flip transform
+  override func layout() {
+    super.layout()
+    tileLayer.bounds = bounds
+    tileLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 // Alpha-transparency indicator behind a transparent-background output's preview image — the
 // standard "this is where the alpha shows" checkerboard. Placed via `.background` on the
-// aspect-fit `Image` in `OutputTile.preview` so it inherits that view's exact frame (the
-// aspect-fit rect), not the tile's own frame, which can be taller/wider when letterboxed.
+// `TileLayerView` in `OutputTile.preview` so it inherits that view's frame.
 private struct CheckerboardBackground: View {
   private let squareSize: CGFloat = 8
 

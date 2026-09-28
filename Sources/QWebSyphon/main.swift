@@ -36,23 +36,32 @@ class WindowDelegate: NSObject, NSWindowDelegate {
 
   // With the Dock icon hidden, the app has no other way back on screen than the menu bar (no Dock
   // icon, no main menu), so closing the window just hides it — outputs and OSC keep running, and
-  // "Show Window" in the status menu brings it back. With the Dock icon shown, unchanged: closing
-  // quits (windowWillClose below).
+  // "Show Window" in the status menu brings it back. With the Dock icon shown, closing quits —
+  // through `terminate`, so the quit confirmation runs first and Cancel leaves the window open.
   func windowShouldClose(_ sender: NSWindow) -> Bool {
-    guard !showDockIconEnabled() else { return true }
-    sender.orderOut(nil)
+    if showDockIconEnabled() {
+      NSApp.terminate(nil)
+    } else {
+      sender.orderOut(nil)
+    }
     return false
   }
+}
 
-  func windowWillClose(_ notification: Notification) {
-    NSApplication.shared.terminate(0)
+// Never plays the system alert sound: a key nothing handles (or a disabled menu shortcut) ends
+// at the window's `noResponder(for:)`, whose default is NSBeep. The app runs during
+// performances, where any sound out of this Mac is worse than an ignored keystroke.
+final class SilentWindow: NSWindow {
+  override func noResponder(for eventSelector: Selector) {
+    if eventSelector == #selector(keyDown(with:)) { return }
+    super.noResponder(for: eventSelector)
   }
 }
 
 @available(macOS 14, *)
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
-  let mainWindow: NSWindow = NSWindow()
+  let mainWindow: NSWindow = SilentWindow()
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
 
   // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
@@ -62,6 +71,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var outputHost: OutputHost?
   var statusMenuController: StatusMenuController!
   private var oscPortCancellable: AnyCancellable?
+  private var occlusionObserver: NSObjectProtocol?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
 
@@ -105,6 +115,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       showSettings: { [weak self] in self?.showSettings() }
     )
 
+    occlusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification, object: mainWindow, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.model.tilesVisible = self.mainWindow.occlusionState.contains(.visible)
+      }
+    }
     model.startCapture()
     oscController.start(port: model.oscPort)
 
@@ -131,6 +149,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if !visible {
       NSApp.activate(ignoringOtherApps: true)
     }
+  }
+
+  // Every quit path (⌘Q, the status menu, closing the main window) asks first: quitting drops
+  // every Syphon source mid-show. Cancel is the default button, so a stray Return doesn't quit.
+  // Logout, restart and shutdown aren't held up.
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    let systemReasons = [
+      kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog,
+      kAEShutDown,
+    ].map { UInt32($0) }
+    // The reason arrives as an attribute on some systems and a parameter on others; check both.
+    let event = NSAppleEventManager.shared().currentAppleEvent
+    let keyword = AEKeyword(kAEQuitReason)
+    if let reason = (event?.attributeDescriptor(forKeyword: keyword)
+      ?? event?.paramDescriptor(forKeyword: keyword))?.enumCodeValue,
+      systemReasons.contains(reason)
+    {
+      return .terminateNow
+    }
+
+    NSApp.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.messageText = "Quit QWebSyphon?"
+    let count = model.outputs.count
+    alert.informativeText =
+      "\(count == 1 ? "The Syphon output stops" : "All \(count) Syphon outputs stop"), and clients like QLab lose \(count == 1 ? "its source" : "their sources")."
+    alert.addButton(withTitle: "Cancel")
+    let quit = alert.addButton(withTitle: "Quit")
+    quit.hasDestructiveAction = true
+    return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -178,6 +226,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let editMenuItem = NSMenuItem()
     let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+    let redoItem = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+    redoItem.keyEquivalentModifierMask = [.command, .shift]
+    editMenu.addItem(redoItem)
+    editMenu.addItem(NSMenuItem.separator())
     editMenu.addItem(
       NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
     editMenu.addItem(
@@ -198,6 +251,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     viewMenu.addItem(reloadItem)
     viewMenuItem.submenu = viewMenu
     mainMenu.addItem(viewMenuItem)
+
+    // Standard window commands: without a Close item, ⌘W on any window (e.g. Settings) has no
+    // handler and AppKit plays the error sound — not something to hear mid-show.
+    let windowMenuItem = NSMenuItem()
+    let windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(
+      NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+    windowMenu.addItem(
+      NSMenuItem(
+        title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+    windowMenuItem.submenu = windowMenu
+    mainMenu.addItem(windowMenuItem)
+    NSApp.windowsMenu = windowMenu
 
     NSApp.mainMenu = mainMenu
   }
@@ -256,9 +322,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       onDockIconChange: { [weak self] visible in self?.setDockIconVisible(visible) })
     let hostingView = NSHostingView(rootView: settingsViewInst)
 
-    let window = NSWindow(
+    let window = SilentWindow(
       contentRect: CGRect(x: 0, y: 0, width: 460, height: 520),
-      styleMask: [.closable, .titled],
+      styleMask: [.closable, .titled, .miniaturizable],
       backing: .buffered,
       defer: false
     )

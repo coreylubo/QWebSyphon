@@ -157,60 +157,17 @@ func dispatchOSCMessage(_ message: OSCMessage, controller: OSCController) {
   }
 }
 
-// One documented OSC address for the "OSC Commands" reference list (Settings, cluster 3).
-struct OSCCommandInfo: Identifiable {
-  let id: String
-  let args: String
-  let description: String
-}
-
-// Legacy forms + scoped forms + one concrete example per output (by name, or by index for a
-// grandfathered non-slug name). Touches `Output.name`, so main-actor only.
+// The "OSC Commands" reference list (Settings, cluster 3): generic scoped forms, one group per
+// output, and a footnote for the still-live unscoped ("legacy") forms when a legacy output
+// exists. Touches `Output.name`, so main-actor only; generation itself is pure (`OSCReference.swift`).
 @available(macOS 14, *)
 @MainActor
-func oscCommandReference(outputs: [Output]) -> [OSCCommandInfo] {
-  var commands: [OSCCommandInfo] = [
-    OSCCommandInfo(
-      id: "/syphon/url", args: "string",
-      description: "Load a URL in the legacy output (https:// added if no scheme is given)."),
-    OSCCommandInfo(
-      id: "/syphon/bookmark", args: "string or int",
-      description:
-        "Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int/float), in the legacy output."
-    ),
-    OSCCommandInfo(
-      id: "/syphon/bookmark/<label>", args: "none",
-      description: "Load the bookmark with this OSC label, in the legacy output."),
-    OSCCommandInfo(
-      id: "/syphon/refresh", args: "none", description: "Reload the current page in the legacy output."
-    ),
-    OSCCommandInfo(
-      id: "/syphon/enable", args: "0/1, true/false, or int/float",
-      description: "Enable (1) or disable (0) the legacy output."),
-    OSCCommandInfo(
-      id: "/syphon/<output>/url", args: "string",
-      description: "Load a URL in <output> (name, case-insensitive, or 1-based index)."),
-    OSCCommandInfo(
-      id: "/syphon/<output>/bookmark", args: "string or int",
-      description: "Load a bookmark by label, name, or 1-based sidebar position, in <output>."),
-    OSCCommandInfo(
-      id: "/syphon/<output>/bookmark/<label>", args: "none",
-      description: "Load the bookmark with this OSC label, in <output>."),
-    OSCCommandInfo(
-      id: "/syphon/<output>/refresh", args: "none", description: "Reload the current page in <output>."
-    ),
-    OSCCommandInfo(
-      id: "/syphon/<output>/enable", args: "0/1, true/false, or int/float",
-      description: "Enable (1) or disable (0) <output>."),
-  ]
-  for (index, output) in outputs.enumerated() {
-    let ref = isOSCAddressableName(output.name) ? output.name : String(index + 1)
-    commands.append(
-      OSCCommandInfo(
-        id: "/syphon/\(ref)/url", args: "string",
-        description: "Example: load a URL in \"\(output.name)\"."))
-  }
-  return commands
+func oscCommandReference(
+  outputs: [Output], legacyOutput: Output?, labelledBookmarks: [(label: String, name: String)]
+) -> OSCReference {
+  let outputTuples = outputs.enumerated().map { (name: $0.element.name, index: $0.offset + 1) }
+  return buildOSCReference(
+    outputs: outputTuples, labelledBookmarks: labelledBookmarks, legacyOutputName: legacyOutput?.name)
 }
 
 // Creates and starts a server in one step so bind failures propagate to the caller instead of
