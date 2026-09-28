@@ -5,6 +5,9 @@ import SwiftOSC
 import SwiftUI
 import Syphon
 
+// Copy pre-rename SyphonWeb settings (once) before AppKit or anything else reads defaults.
+_ = appDefaults
+
 // Stop app from napping
 var activity: NSObjectProtocol?
 activity = ProcessInfo().beginActivity(

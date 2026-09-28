@@ -1,9 +1,17 @@
 import Foundation
+import QWebSyphonCore
 
-// Parses `--profile <name>` from the command line (falling back to the SYPHONWEB_PROFILE env var)
-// so `open -n SyphonWeb.app --args --profile NAME` can run multiple isolated instances. A valid
-// name is used to pick a separate UserDefaults suite and Syphon server name; an invalid one is
-// logged and treated as no profile (default/`.standard`).
+// Reads `QWEBSYPHON_<suffix>`, falling back to the pre-rename `SYPHONWEB_<suffix>`. Empty = unset.
+func appEnvironment(_ suffix: String) -> String? {
+  let environment = ProcessInfo.processInfo.environment
+  return ["QWEBSYPHON_\(suffix)", "SYPHONWEB_\(suffix)"].lazy.compactMap { environment[$0] }
+    .first { !$0.isEmpty }
+}
+
+// Parses `--profile <name>` from the command line (falling back to the QWEBSYPHON_PROFILE, then
+// SYPHONWEB_PROFILE, env var) so `open -n QWebSyphon.app --args --profile NAME` can run multiple
+// isolated instances. A valid name is used to pick a separate UserDefaults suite and Syphon server
+// name; an invalid one is logged and treated as no profile (default/`.standard`).
 private let profileNameAllowedChars = Set(
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
@@ -12,7 +20,7 @@ private func parseProfileName() -> String? {
   if let flagIndex = arguments.firstIndex(of: "--profile"), arguments.indices.contains(flagIndex + 1) {
     return arguments[flagIndex + 1]
   }
-  return ProcessInfo.processInfo.environment["SYPHONWEB_PROFILE"]
+  return appEnvironment("PROFILE")
 }
 
 let profileName: String? = {
@@ -26,13 +34,24 @@ let profileName: String? = {
 
 // Settings storage for this launch: a per-profile suite when `--profile` is valid, else `.standard`.
 // Bookmarks (in the shared SQLite DB) are not affected by this and stay shared across profiles.
+// Before first use, copies the pre-rename SyphonWeb settings in once (see `migrateLegacyDefaults`);
+// main.swift touches this first thing so nothing reads settings before the copy.
 nonisolated(unsafe) let appDefaults: UserDefaults = {
-  guard let profileName else { return .standard }
-  guard let suite = UserDefaults(suiteName: "SyphonWeb.profile.\(profileName)") else {
-    appLog("Could not open UserDefaults suite for profile \"\(profileName)\", using standard")
-    return .standard
+  var defaults = UserDefaults.standard
+  var suiteProfile: String?
+  if let profileName {
+    if let suite = UserDefaults(suiteName: "QWebSyphon.profile.\(profileName)") {
+      (defaults, suiteProfile) = (suite, profileName)
+    } else {
+      appLog("Could not open UserDefaults suite for profile \"\(profileName)\", using standard")
+    }
   }
-  return suite
+  migrateLegacyDefaults(
+    into: defaults,
+    legacyDomains: legacyDefaultsDomains(
+      profile: suiteProfile, isBundled: Bundle.main.bundleIdentifier != nil),
+    read: UserDefaults.standard.persistentDomain(forName:), log: appLog)
+  return defaults
 }()
 
 // NSLog treats its first argument as a format string, so interpolated URLs or OSC addresses

@@ -7,7 +7,7 @@
   <key>CFBundleExecutable</key>
   <string>QWebSyphon</string>
   <key>CFBundleIdentifier</key>
-  <string>surf.puppy.SyphonWeb</string>
+  <string>com.gr8xco.QWebSyphon</string>
   <key>CFBundleName</key>
   <string>QWebSyphon</string>
   <key>CFBundleIconFile</key>
