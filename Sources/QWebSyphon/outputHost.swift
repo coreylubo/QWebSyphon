@@ -152,7 +152,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
       .store(in: &cancellables)
 
     output.$url
-      .sink { [weak self] url in self?.load(url) }
+      .sink { [weak self] url in self?.load(url, enabled: output.enabled) }
       .store(in: &cancellables)
 
     // Skips the initial value: `load(_:)`'s `enabled` guard already covers the launch-disabled
@@ -165,9 +165,12 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
 
   // The single place anything loads a URL into this output's web view — navigation (URL,
   // bookmark, drag/drop, OSC `/url`/`/bookmark`), reload, and enabling all funnel through here (or
-  // through `setEnabled` below), so disabled-ness only has to be enforced once.
-  private func load(_ url: URL) {
-    guard output.enabled else { return }
+  // through `setEnabled` below), so disabled-ness only has to be enforced once. `enabled` is taken
+  // as a parameter rather than read from `output.enabled`: `@Published` emits on willSet, so a
+  // call made from the `$enabled` sink itself (`setEnabled`, below) would otherwise still see the
+  // OLD value at this point — the same hazard as `OutputHost.sync`'s comment about `model.outputs`.
+  private func load(_ url: URL, enabled: Bool) {
+    guard enabled else { return }
     guard url.absoluteString != output.currentUrl?.absoluteString else { return }
     webView.load(URLRequest(url: url))
     output.currentUrl = url
@@ -179,7 +182,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
   // `output.url` through the same `load(_:)`.
   private func setEnabled(_ enabled: Bool) {
     if enabled {
-      load(output.url)
+      load(output.url, enabled: true)
     } else {
       webView.stopLoading()
       webView.load(URLRequest(url: URL(string: "about:blank")!))
