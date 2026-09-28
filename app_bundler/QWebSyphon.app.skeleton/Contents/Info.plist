@@ -12,6 +12,8 @@
   <string>QWebSyphon</string>
   <key>CFBundleIconFile</key>
   <string>QWebSyphon.icns</string>
+  <key>CFBundleIconName</key>
+  <string>QWebSyphon</string>
   <key>CFBundleShortVersionString</key>
   <string>1.0.0</string>
   <key>CFBundleInfoDictionaryVersion</key>
