@@ -23,6 +23,20 @@ func integralOSCValue(_ value: any OSCValue) -> Int? {
   }
 }
 
+// Wraps a raw OSC argument as an `OSCEnableArgument` for the pure core parser, or nil for a type
+// `/enable` doesn't accept.
+func oscEnableArgument(_ value: any OSCValue) -> OSCEnableArgument? {
+  switch value {
+  case let v as Bool: return .bool(v)
+  case let v as Int32: return .int(Int(v))
+  case let v as Int64: return .int(Int(v))
+  case let v as Float32: return .double(Double(v))
+  case let v as Double: return .double(v)
+  case let v as String: return .string(v)
+  default: return nil
+  }
+}
+
 // `/syphon/bookmark <name-or-position>`: a string label/name matches `Bookmark.find(label:)`
 // first, then falls back to a case-insensitive name match; an int/float selects by 1-based
 // sidebar position.
@@ -131,6 +145,15 @@ func dispatchOSCMessage(_ message: OSCMessage, controller: OSCController) {
 
   case .refresh(let scope):
     withOutput(scope) { $0.reload() }
+
+  case .enable(let scope):
+    guard let first = values.first, let argument = oscEnableArgument(first),
+      let value = parseEnableArgument(argument)
+    else {
+      appLog("OSC: \(address) requires 0/1, true/false, or an integral number, ignoring")
+      return
+    }
+    withOutput(scope) { $0.enabled = value }
   }
 }
 
@@ -162,6 +185,9 @@ func oscCommandReference(outputs: [Output]) -> [OSCCommandInfo] {
       id: "/syphon/refresh", args: "none", description: "Reload the current page in the legacy output."
     ),
     OSCCommandInfo(
+      id: "/syphon/enable", args: "0/1, true/false, or int/float",
+      description: "Enable (1) or disable (0) the legacy output."),
+    OSCCommandInfo(
       id: "/syphon/<output>/url", args: "string",
       description: "Load a URL in <output> (name, case-insensitive, or 1-based index)."),
     OSCCommandInfo(
@@ -173,6 +199,9 @@ func oscCommandReference(outputs: [Output]) -> [OSCCommandInfo] {
     OSCCommandInfo(
       id: "/syphon/<output>/refresh", args: "none", description: "Reload the current page in <output>."
     ),
+    OSCCommandInfo(
+      id: "/syphon/<output>/enable", args: "0/1, true/false, or int/float",
+      description: "Enable (1) or disable (0) <output>."),
   ]
   for (index, output) in outputs.enumerated() {
     let ref = isOSCAddressableName(output.name) ? output.name : String(index + 1)

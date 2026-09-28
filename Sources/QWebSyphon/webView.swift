@@ -37,7 +37,9 @@ final class Output: ObservableObject, Identifiable {
       // Synchronous, no `await` in between: captureFrame (main actor, 60Hz timer) never
       // observes frameServer in a stopped-but-not-yet-replaced state.
       frameServer?.stop()
-      frameServer = SyphonMetalServer(name: name, device: metalDevice)
+      // Disabled: no server to (re)create under the new name; `enabled`'s didSet creates one
+      // (with the then-current name) on enable.
+      frameServer = enabled ? SyphonMetalServer(name: name, device: metalDevice) : nil
       onConfigChange?()
     }
   }
@@ -78,6 +80,23 @@ final class Output: ObservableObject, Identifiable {
   // sidebar's live-bookmark matching.
   @Published var bookmarkID: Int64? { didSet { onConfigChange?() } }
 
+  // Off: stops and drops the Syphon server (the source disappears from clients) and unloads the
+  // page (`OutputWebViewController`, subscribed to this, loads about:blank) to free CPU. On:
+  // recreates the server under the current name and reloads `url`. `url`/`bookmarkID` are
+  // untouched either way — see `navigate(to:)`/`open(bookmark:)`.
+  @Published var enabled: Bool = true {
+    didSet {
+      guard enabled != oldValue else { return }
+      if enabled {
+        frameServer = SyphonMetalServer(name: name, device: metalDevice)
+      } else {
+        frameServer?.stop()
+        frameServer = nil
+      }
+      onConfigChange?()
+    }
+  }
+
   // Backing scale factor (1x/2x) of the window hosting this output's web view (OutputHost's
   // window, which keeps it current as the host follows the main window between screens).
   @Published var backingScale: CGFloat = 2.0
@@ -97,19 +116,20 @@ final class Output: ObservableObject, Identifiable {
     transparentBackground = config.transparentBackground
     captureWithoutClients = config.captureWithoutClients
     bookmarkID = config.bookmarkID
+    enabled = config.enabled
     stats = OutputStats()
     stats.output = self
     // Created with the final name up front (not renamed afterwards): QLab and other clients only
     // read the name from the initial Syphon announce, so a later rename leaves them showing stale
-    // or duplicate source names.
-    frameServer = SyphonMetalServer(name: name, device: metalDevice)
+    // or duplicate source names. Disabled at launch: no server until enabled.
+    frameServer = config.enabled ? SyphonMetalServer(name: name, device: metalDevice) : nil
   }
 
   var config: OutputConfig {
     OutputConfig(
       id: id, name: name, url: url.absoluteString, resolution: resolution, customSize: customSize,
       transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients,
-      bookmarkID: bookmarkID)
+      bookmarkID: bookmarkID, enabled: enabled)
   }
 
   // Effective output pixel size: the custom size if set, else the preset's.
@@ -163,7 +183,9 @@ final class Output: ObservableObject, Identifiable {
     bookmarkID = bookmark.id
   }
 
+  // No-ops while disabled: there's nothing loaded to reload.
   func reload() {
+    guard enabled else { return }
     appLog("Reloading page")
     webView?.reload()
   }
@@ -201,10 +223,12 @@ final class Output: ObservableObject, Identifiable {
   }
 
   // Captures the web view into the texture and publishes it. Called by AppModel's capture
-  // driver; skipped while the page is loading, before initMetal, and (if
-  // `captureWithoutClients` is off) while no Syphon client is connected.
+  // driver; skipped while disabled (no server to publish to), while the page is loading, before
+  // initMetal, and (if `captureWithoutClients` is off) while no Syphon client is connected.
   func captureFrame(commandQueue: MTLCommandQueue) {
-    guard !loading, let webView, let texture, let graphicsContext, let region else { return }
+    guard enabled, !loading, let webView, let texture, let graphicsContext, let region else {
+      return
+    }
     if !captureWithoutClients && frameServer?.hasClients != true { return }
     guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 

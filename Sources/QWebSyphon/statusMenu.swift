@@ -104,12 +104,21 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
   }
 
   private func makeRow(for output: Output, bookmarks: [Bookmark]) -> NSMenuItem {
-    let level = outputStatusLevel(
-      OutputHealth(loading: output.loading, failed: output.loadError != nil, fps: output.stats.fps))
-    let fpsText = output.loading ? "— fps" : "\(output.stats.fps) fps"
-    let clientsText = (output.frameServer?.hasClients ?? false) ? "clients" : "no clients"
-    let sourceText = bookmarkOrHostLabel(for: output, bookmarks: bookmarks)
-    let text = "●  \(output.name) — \(fpsText) · \(clientsText) · \(sourceText)"
+    let text: String
+    let color: NSColor
+    if output.enabled {
+      let level = outputStatusLevel(
+        OutputHealth(
+          loading: output.loading, failed: output.loadError != nil, fps: output.stats.fps))
+      let fpsText = output.loading ? "— fps" : "\(output.stats.fps) fps"
+      let clientsText = (output.frameServer?.hasClients ?? false) ? "clients" : "no clients"
+      let sourceText = bookmarkOrHostLabel(for: output, bookmarks: bookmarks)
+      text = "●  \(output.name) — \(fpsText) · \(clientsText) · \(sourceText)"
+      color = Self.nsColor(for: level)
+    } else {
+      text = "●  \(output.name) — Disabled"
+      color = .secondaryLabelColor
+    }
 
     let item = NSMenuItem(title: "", action: #selector(rowTapped(_:)), keyEquivalent: "")
     item.target = self
@@ -120,8 +129,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     let attributed = NSMutableAttributedString(
       string: text,
       attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)])
-    attributed.addAttribute(
-      .foregroundColor, value: Self.nsColor(for: level), range: NSRange(location: 0, length: 1))
+    attributed.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: 1))
     item.attributedTitle = attributed
     return item
   }
@@ -147,7 +155,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
   private func overallLevel() -> StatusLevel {
     let healths = model.outputs.map {
-      OutputHealth(loading: $0.loading, failed: $0.loadError != nil, fps: $0.stats.fps)
+      OutputHealth(
+        loading: $0.loading, failed: $0.loadError != nil, fps: $0.stats.fps, enabled: $0.enabled)
     }
     return statusLevel(outputs: healths, oscListening: oscController.port != nil)
   }

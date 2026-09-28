@@ -154,12 +154,37 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     output.$url
       .sink { [weak self] url in self?.load(url) }
       .store(in: &cancellables)
+
+    // Skips the initial value: `load(_:)`'s `enabled` guard already covers the launch-disabled
+    // case, and disabling/enabling itself only matters on a later change.
+    output.$enabled
+      .dropFirst()
+      .sink { [weak self] enabled in self?.setEnabled(enabled) }
+      .store(in: &cancellables)
   }
 
+  // The single place anything loads a URL into this output's web view — navigation (URL,
+  // bookmark, drag/drop, OSC `/url`/`/bookmark`), reload, and enabling all funnel through here (or
+  // through `setEnabled` below), so disabled-ness only has to be enforced once.
   private func load(_ url: URL) {
+    guard output.enabled else { return }
     guard url.absoluteString != output.currentUrl?.absoluteString else { return }
     webView.load(URLRequest(url: url))
     output.currentUrl = url
+  }
+
+  // Disable: unloads the page (about:blank) without touching `output.url`/`bookmarkID`, so
+  // reconcile/live-bookmark matching and the saved URL are unaffected, and resets `currentUrl` so
+  // `load(_:)`'s "unchanged" guard doesn't skip the reload below on re-enable. Enable: reloads
+  // `output.url` through the same `load(_:)`.
+  private func setEnabled(_ enabled: Bool) {
+    if enabled {
+      load(output.url)
+    } else {
+      webView.stopLoading()
+      webView.load(URLRequest(url: URL(string: "about:blank")!))
+      output.currentUrl = nil
+    }
   }
 
   // Re-provisions the texture/context/region and re-lays out the page at a new output size or

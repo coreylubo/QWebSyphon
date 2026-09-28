@@ -127,7 +127,7 @@ struct MainView: View {
     bookmarks.filter(\.favorite) + bookmarks.filter { !$0.favorite }
   }
 
-  // Fires whenever any output's url/bookmarkID/name changes. `.receive(on:)` defers past
+  // Fires whenever any output's url/bookmarkID/name/enabled changes. `.receive(on:)` defers past
   // `@Published`'s willSet-time emission (see main.swift's oscPort comment) so `updateLiveMap`
   // reads the NEW value, not the one about to be overwritten.
   private var outputChangePublisher: AnyPublisher<Void, Never> {
@@ -137,6 +137,7 @@ struct MainView: View {
           output.$url.map { _ in () }.eraseToAnyPublisher(),
           output.$bookmarkID.map { _ in () }.eraseToAnyPublisher(),
           output.$name.map { _ in () }.eraseToAnyPublisher(),
+          output.$enabled.map { _ in () }.eraseToAnyPublisher(),
         ]
       }
     )
@@ -144,8 +145,12 @@ struct MainView: View {
     .eraseToAnyPublisher()
   }
 
+  // A disabled output isn't playing anything, so it's excluded before matching — otherwise its
+  // last (frozen) url/bookmarkID would still show it live.
   private func updateLiveMap() {
-    let outputs = model.outputs.map { (id: $0.id, url: $0.url, bookmarkID: $0.bookmarkID) }
+    let outputs = model.outputs.filter(\.enabled).map {
+      (id: $0.id, url: $0.url, bookmarkID: $0.bookmarkID)
+    }
     let liveBookmarks = orderedBookmarksForLive.map { (id: $0.id, url: $0.url) }
     liveMap = liveBookmarkIDs(outputs: outputs, bookmarks: liveBookmarks)
   }
