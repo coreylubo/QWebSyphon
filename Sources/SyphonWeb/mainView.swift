@@ -72,7 +72,15 @@ struct MainView: View {
               ) {
                 OutputSettingsPopover(
                   model: model, output: output,
-                  outputIndex: (model.outputs.firstIndex(where: { $0.id == output.id }) ?? 0) + 1)
+                  outputIndex: (model.outputs.firstIndex(where: { $0.id == output.id }) ?? 0) + 1,
+                  canDelete: model.outputs.count > 1,
+                  onDelete: {
+                    settingsOutputID = nil
+                    // Popover dismissal and this confirmation both drive presentation state in
+                    // the same run loop; deferring avoids the two fighting over SwiftUI's
+                    // presentation machinery.
+                    DispatchQueue.main.async { outputPendingRemoval = output }
+                  })
               }
             }
           }
@@ -96,11 +104,11 @@ struct MainView: View {
       }
     }
     .confirmationDialog(
-      "Remove \u{201c}\(outputPendingRemoval?.name ?? "")\u{201d}?",
+      "Delete \u{201c}\(outputPendingRemoval?.name ?? "")\u{201d}?",
       isPresented: Binding(
         get: { outputPendingRemoval != nil }, set: { if !$0 { outputPendingRemoval = nil } })
     ) {
-      Button("Remove", role: .destructive) {
+      Button("Delete", role: .destructive) {
         if let output = outputPendingRemoval { model.removeOutput(output.id) }
         outputPendingRemoval = nil
       }
@@ -275,8 +283,11 @@ private struct SidebarContent: View {
   }
 
   @ViewBuilder func makeBookmark(bookmark: Bookmark) -> some View {
-    BookmarkRow(bookmark: bookmark, liveOutputNames: liveOutputNames(bookmark))
-      .tag(bookmark.id)
+    BookmarkRow(
+      bookmark: bookmark, liveOutputNames: liveOutputNames(bookmark),
+      isLiveInSelectedOutput: liveMap[bookmark.id]?.contains(output.id) == true
+    )
+    .tag(bookmark.id)
       // `.onDrag`/`.onDrop` (not `.draggable`/`.dropDestination`): rows here live inside a
       // `List(selection:)`, and `.draggable` on such a row is known to fight the List's own
       // click-to-select/double-click gesture recognizers on macOS 14. `.onDrag` is the older,
@@ -302,29 +313,31 @@ private struct SidebarContent: View {
   }
 }
 
-// One sidebar row. Live bookmarks (live in any output) are bolded with a globe icon and, after
-// the name, muted text naming which output(s) — e.g. "(Overlay)" or "(Main, Overlay)". The icon is
-// white instead of blue when the row is selected (background prominence increased), so it stays
-// visible against the selection highlight.
+// One sidebar row. A bookmark live in the currently selected output is bolded with a globe icon;
+// the icon/bold don't fire for a bookmark live only in some other output. Either way, if it's live
+// in any output, muted text after the name names which output(s) — e.g. "(Overlay)" or
+// "(Main, Overlay)". The icon is white instead of blue when the row is selected (background
+// prominence increased), so it stays visible against the selection highlight.
 @available(macOS 14, *)
 private struct BookmarkRow: View {
   let bookmark: Bookmark
   let liveOutputNames: [String]
+  let isLiveInSelectedOutput: Bool
 
   @Environment(\.backgroundProminence) private var prominence
 
-  private var isLive: Bool { !liveOutputNames.isEmpty }
+  private var isLiveAnywhere: Bool { !liveOutputNames.isEmpty }
 
   var body: some View {
     HStack(spacing: 6) {
       Group {
-        if isLive {
+        if isLiveInSelectedOutput {
           Image(systemName: "globe")
             .foregroundStyle(prominence == .increased ? Color.white : Color.blue)
         }
       }.frame(width: 16)
-      Text(bookmark.name).lineLimit(1).fontWeight(isLive ? .bold : .regular)
-      if isLive {
+      Text(bookmark.name).lineLimit(1).fontWeight(isLiveInSelectedOutput ? .bold : .regular)
+      if isLiveAnywhere {
         Text("(\(liveOutputNames.joined(separator: ", ")))")
           .font(.caption)
           .foregroundStyle(.secondary)

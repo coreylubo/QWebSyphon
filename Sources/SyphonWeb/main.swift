@@ -153,10 +153,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appMenuItem = NSMenuItem()
     let appMenu = NSMenu()
 
-    appMenu.addItem(
-      NSMenuItem(
-        title: "About SyphonWeb", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-        keyEquivalent: ""))
+    let aboutItem = NSMenuItem(
+      title: "About SyphonWeb", action: #selector(showAbout), keyEquivalent: "")
+    aboutItem.target = self
+    appMenu.addItem(aboutItem)
     appMenu.addItem(NSMenuItem.separator())
 
     let settingsItem = NSMenuItem(
@@ -201,6 +201,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func reloadPage() {
     model.selectedOutput.reload()
+  }
+
+  // Standard about panel with programmatic credits (replaces Credits.rtf, which only the bundled
+  // app read — `swift run` never picked it up). Centered, small, label-colored so it holds up in
+  // both appearances.
+  @objc private func showAbout() {
+    let paragraphStyle = NSMutableParagraphStyle()
+    paragraphStyle.alignment = .center
+    let baseAttributes: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+      .foregroundColor: NSColor.labelColor,
+      .paragraphStyle: paragraphStyle,
+    ]
+
+    func line(_ text: String, link: String? = nil) -> NSAttributedString {
+      var attributes = baseAttributes
+      if let link { attributes[.link] = URL(string: link)! }
+      return NSAttributedString(string: text, attributes: attributes)
+    }
+
+    let credits = NSMutableAttributedString()
+    for piece in [
+      line("The Great Experience Company", link: "https://gr8x.co"),
+      line("\n\n"),
+      line("Based on SyphonWeb by Digit (@doawoo)"),
+      line("\n"),
+      line("github.com/doawoo/SyphonWeb", link: "https://github.com/doawoo/SyphonWeb"),
+      line("\n"),
+      line("puppy.surf", link: "https://puppy.surf"),
+      line("\n\n"),
+      line("Thanks to the "),
+      line("Syphon", link: "https://syphon.github.io"),
+      line(" project."),
+    ] {
+      credits.append(piece)
+    }
+
+    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
   }
 
   @objc private func showSettings() {

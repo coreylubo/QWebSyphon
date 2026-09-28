@@ -118,6 +118,5 @@ Bookmarks are stored in a shared SQLite database at
 
 ## Credits
 
-Forked from [SyphonWeb](https://github.com/doawoo/SyphonWeb) by Digit (@doawoo).
-
-Made with 🐾 by Digit (@doawoo)
+By [The Great Experience Company](https://gr8x.co), based on [SyphonWeb](https://github.com/doawoo/SyphonWeb) by
+Digit (@doawoo).
