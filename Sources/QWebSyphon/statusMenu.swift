@@ -171,11 +171,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
   // `macwindow` tinted to the menu bar foreground, with a small filled circle at the
   // bottom-trailing corner for the status colour. See the type comment for the composition
-  // technique (adapted from Prompter's `statusImage`). The whole image is 18pt tall (menu bar
-  // height minus padding): the glyph is shrunk and offset so the dot, centred on its
-  // bottom-trailing corner, stays inside the canvas with a half-point margin.
+  // technique (adapted from Prompter's `statusImage`). The image fills the 22pt menu bar: the glyph
+  // is shrunk and centred vertically, with the dot's overhang reserved above as well as below so
+  // it stays balanced; the dot, centred on the glyph's bottom-trailing corner, stays inside the
+  // canvas with a half-point margin.
   private static func statusImage(color: NSColor) -> NSImage {
-    let height: CGFloat = 18
+    let height: CGFloat = 22
     guard
       let symbol = NSImage(
         systemSymbolName: "macwindow", accessibilityDescription: "QWebSyphon")
@@ -185,9 +186,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     symbol.isTemplate = true
     let aspect = symbol.size.height > 0 ? symbol.size.width / symbol.size.height : 1
 
-    let dotDiameter: CGFloat = 7
+    let dotDiameter: CGFloat = 6.5
     let overhang = dotDiameter / 2 + 0.5
-    let glyphHeight = height - overhang
+    let glyphHeight = height - 2 * overhang
     let glyphWidth = (glyphHeight * aspect).rounded()
     let size = NSSize(width: glyphWidth + overhang, height: height)
     let glyphRect = NSRect(x: 0, y: overhang, width: glyphWidth, height: glyphHeight)
