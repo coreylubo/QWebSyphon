@@ -96,6 +96,7 @@ final class Output: ObservableObject, Identifiable {
         // So re-enabling shows the placeholder until a fresh frame, not the last one from before.
         previewImage = nil
         tileDirty = false
+        tileCommands = nil
       }
       onConfigChange?()
     }
@@ -250,8 +251,10 @@ final class Output: ObservableObject, Identifiable {
         bytesPerRow: tileWidth * 4, space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     }
-    // A readback still in flight targets the old buffer: drop it rather than read it
+    // A readback still in flight targets the old buffer: drop it rather than read it. The new
+    // texture holds nothing until the next capture, so there is nothing to read back yet either.
     tileCommands = nil
+    tileDirty = false
   }
 
   // Captures the web view into the texture and publishes it. Called by AppModel's capture
@@ -327,6 +330,16 @@ final class Output: ObservableObject, Identifiable {
   // has finished it, then (if a new frame was captured) queues the next one: downscale + blit on
   // the capture queue, never waited on, so the capture tick never stalls.
   func refreshTile(commandQueue: MTLCommandQueue) {
+    guard enabled else { return }
+    // CPU fallback: the captured pixels are already in `graphicsContext`. Reading them here
+    // (between captures, on the main actor) avoids a GPU readback racing the CPU-side
+    // `texture.replace` of the next capture.
+    if let graphicsContext {
+      guard tileDirty else { return }
+      tileDirty = false
+      previewImage = makeTileImage(graphicsContext)
+      return
+    }
     if let pending = tileCommands {
       guard pending.status == .completed else { return }
       tileCommands = nil
