@@ -124,6 +124,7 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
     super.init()
 
     webView.navigationDelegate = self
+    webView.muteAllAudio()
     container.addSubview(webView)  // frame origin (0,0): all outputs stacked
     output.webView = webView
 
@@ -279,5 +280,22 @@ final class OutputWebViewController: NSObject, WKNavigationDelegate {
   // commit, not just on size changes, so this covers the process-swap case too.
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
     nudgeViewport(size: webView.frame.size)
+    webView.muteAllAudio()  // again after a process swap, in case the new process doesn't inherit it
+  }
+}
+
+extension WKWebView {
+  // Outputs are video only (Syphon carries no audio): page audio would come out of this Mac's
+  // speakers mid-show. Private `_setPageMuted:` with `_WKMediaAudioMuted` (1) mutes everything the
+  // page plays (media elements and Web Audio) without stopping playback, so video still renders.
+  // No public macOS API does this; if the SPI disappears, audio is left as is (logged).
+  func muteAllAudio() {
+    let selector = NSSelectorFromString("_setPageMuted:")
+    guard responds(to: selector) else {
+      appLog("WKWebView has no _setPageMuted:, page audio is not muted")
+      return
+    }
+    typealias SetMuted = @convention(c) (AnyObject, Selector, UInt) -> Void
+    unsafeBitCast(method(for: selector), to: SetMuted.self)(self, selector, 1)
   }
 }

@@ -49,10 +49,20 @@ class WindowDelegate: NSObject, NSWindowDelegate {
   }
 }
 
+// Never plays the system alert sound: a key nothing handles (or a disabled menu shortcut) ends
+// at the window's `noResponder(for:)`, whose default is NSBeep. The app runs during
+// performances, where any sound out of this Mac is worse than an ignored keystroke.
+final class SilentWindow: NSWindow {
+  override func noResponder(for eventSelector: Selector) {
+    if eventSelector == #selector(keyDown(with:)) { return }
+    super.noResponder(for: eventSelector)
+  }
+}
+
 @available(macOS 14, *)
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
-  let mainWindow: NSWindow = NSWindow()
+  let mainWindow: NSWindow = SilentWindow()
   let mainWindowDelegate: WindowDelegate = WindowDelegate()
 
   // Retained so the Settings… menu item and OSC dispatch keep working for the app's lifetime.
@@ -283,7 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       onDockIconChange: { [weak self] visible in self?.setDockIconVisible(visible) })
     let hostingView = NSHostingView(rootView: settingsViewInst)
 
-    let window = NSWindow(
+    let window = SilentWindow(
       contentRect: CGRect(x: 0, y: 0, width: 460, height: 520),
       styleMask: [.closable, .titled, .miniaturizable],
       backing: .buffered,
