@@ -50,14 +50,24 @@ several) unattended during a live show, driven from a booth:
 
 ## OSC control
 
-SyphonWeb listens for OSC messages over UDP, port 9000 by default (configurable in Settings):
+SyphonWeb listens for OSC messages over UDP, port 9000 by default (configurable in Settings). One
+port serves every output — legacy (unscoped) addresses always target the legacy output; scoped
+addresses target a specific output by name or 1-based index:
 
 | Address | Args | Behavior |
 |---|---|---|
-| `/syphon/url` | string | Load a URL. Without a scheme, `http://` is added for `localhost`, `*.local` and IPv4 addresses, `https://` otherwise. |
-| `/syphon/bookmark` | string or int/float | Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int, or a whole-number float for senders like TouchOSC). |
-| `/syphon/bookmark/<label>` | none | Load the bookmark with this exact OSC label. |
-| `/syphon/refresh` | none | Reload the current page. |
+| `/syphon/url` | string | Load a URL in the legacy output. Without a scheme, `http://` is added for `localhost`, `*.local` and IPv4 addresses, `https://` otherwise. |
+| `/syphon/bookmark` | string or int/float | Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int, or a whole-number float for senders like TouchOSC), in the legacy output. |
+| `/syphon/bookmark/<label>` | none | Load the bookmark with this exact OSC label, in the legacy output. |
+| `/syphon/refresh` | none | Reload the current page in the legacy output. |
+| `/syphon/<output>/url` | string | Same as `/syphon/url`, targeting `<output>` (its name, case-insensitive, or its 1-based position). |
+| `/syphon/<output>/bookmark` | string or int/float | Same as `/syphon/bookmark`, targeting `<output>`. |
+| `/syphon/<output>/bookmark/<label>` | none | Same as `/syphon/bookmark/<label>`, targeting `<output>`. |
+| `/syphon/<output>/refresh` | none | Same as `/syphon/refresh`, targeting `<output>`. |
+
+An output's name must match the OSC slug rule (letters, digits, `-`, `_`) to be addressable by
+name; an older hand-edited name that doesn't (e.g. one with spaces) is still addressable by index.
+Settings' OSC command reference lists the exact addresses for every current output.
 
 Full reference — argument types, URL normalization rules, bookmark resolution order, failure
 behavior, and worked examples (QLab, TouchOSC, raw UDP) — is in [docs/OSC.md](docs/OSC.md).

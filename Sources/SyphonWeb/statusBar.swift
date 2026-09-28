@@ -23,8 +23,13 @@ final class OutputStats: ObservableObject {
   private var timer: Timer?
 
   init() {
-    let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
+    // The run loop retains the timer, not `self`: stop it once a removed output's stats are freed
+    let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
+      guard let self else {
+        timer.invalidate()
+        return
+      }
+      Task { @MainActor in self.tick() }
     }
     RunLoop.main.add(timer, forMode: .common)
     self.timer = timer
@@ -40,6 +45,18 @@ final class OutputStats: ObservableObject {
 // Truncates a string for inline display, keeping the full text available via `.help`.
 private func truncated(_ text: String, limit: Int = 40) -> String {
   text.count > limit ? String(text.prefix(limit)) + "…" : text
+}
+
+// Client-dot and fps colors, shared with the output grid tiles (outputTiles.swift) so both places
+// agree on what "healthy" looks like.
+enum OutputStatusStyle {
+  static func clientColor(hasClients: Bool) -> Color { hasClients ? .green : .gray }
+
+  // Amber below 55 fps once a page is loaded; while loading, callers show "— fps" instead and
+  // this color is unused, so any value is fine.
+  static func fpsColor(fps: Int, loading: Bool) -> Color {
+    loading ? .secondary : (fps < 55 ? .orange : .primary)
+  }
 }
 
 // A thin status bar below the web view preview: Syphon client presence, output fps, page load
@@ -69,7 +86,7 @@ struct StatusBar: View {
   private var clientsLabel: some View {
     HStack(spacing: 4) {
       Circle()
-        .fill(stats.hasClients ? Color.green : Color.gray)
+        .fill(OutputStatusStyle.clientColor(hasClients: stats.hasClients))
         .frame(width: 6, height: 6)
       Text(stats.hasClients ? "Connected" : "No clients")
     }
@@ -83,7 +100,7 @@ struct StatusBar: View {
         Text("— fps").foregroundStyle(.secondary)
       } else {
         Text("\(stats.fps) fps")
-          .foregroundStyle(stats.fps < 55 ? Color.orange : Color.primary)
+          .foregroundStyle(OutputStatusStyle.fpsColor(fps: stats.fps, loading: state.loading))
       }
     }
   }

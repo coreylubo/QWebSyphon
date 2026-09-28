@@ -1,5 +1,5 @@
+import Combine
 import MetalKit
-import SwiftUI
 import Syphon
 import WebKit
 
@@ -22,6 +22,33 @@ enum OutputResolution: String, CaseIterable, Codable, Sendable {
     case .hd1080: "1080p"
     }
   }
+}
+
+// A validated custom output pixel size (decision 6). The only way to build a valid one is the
+// failable initializer, which enforces the bounds. `Codable` is synthesized directly on the two
+// `Int` properties (bypassing the failable initializer) so an out-of-bounds size in stored JSON
+// still decodes — `sanitizeOutputConfigs` is what turns it back into `nil`, rather than the whole
+// `[OutputConfig]` array failing to decode.
+struct PixelSize: Codable, Hashable, Sendable {
+  static let widthRange = 16...3840
+  static let heightRange = 16...2160
+
+  let width: Int
+  let height: Int
+
+  private init(uncheckedWidth: Int, uncheckedHeight: Int) {
+    width = uncheckedWidth
+    height = uncheckedHeight
+  }
+
+  init?(width: Int, height: Int) {
+    guard PixelSize.widthRange.contains(width), PixelSize.heightRange.contains(height) else {
+      return nil
+    }
+    self.init(uncheckedWidth: width, uncheckedHeight: height)
+  }
+
+  var cgSize: CGSize { CGSize(width: width, height: height) }
 }
 
 // Not private: OSCController (oscServer.swift) checks this key to decide whether a port was
@@ -48,6 +75,8 @@ final class Output: ObservableObject, Identifiable {
   // only read the name from a server's initial announce, so renaming in place leaves
   // stale/duplicate names client-side. Old clients see the source disappear; a new source with
   // the new name appears.
+  // UI should rename through `AppModel.renameOutput`, which validates against the other outputs'
+  // names before assigning here; assigning directly skips that validation.
   @Published var name: String {
     didSet {
       // Recreating the server makes clients drop and re-find the source; skip if unchanged
@@ -66,9 +95,20 @@ final class Output: ObservableObject, Identifiable {
   // in the status bar's page-state indicator.
   @Published var loadError: String?
 
-  // Output resolution. Preview (web view + window) size is derived from this and `backingScale`,
-  // not stored separately.
+  // Output resolution preset. Effective pixel size is `customSize ?? resolution.pixelSize` (see
+  // `pixelSize` below). Kept even when `customSize` is set, as the rollback fallback if the app
+  // downgrades and stops understanding `customSize`.
   @Published var resolution: OutputResolution { didSet { onConfigChange?() } }
+
+  // Custom W×H (decision 6). When set, overrides `resolution` for the effective pixel size; use
+  // `setCustomSize` rather than assigning directly so `resolution` tracks the nearest preset.
+  @Published var customSize: PixelSize? { didSet { onConfigChange?() } }
+
+  // Tile preview image, refreshed at ~15 Hz by AppModel from the last captured frame. Only UI
+  // subscribes to it. Downscaled and upright (`makeTileImage`).
+  @Published var previewImage: CGImage?
+  // Set by captureFrame, cleared by AppModel's tile refresh: a new frame since the last tile
+  var tileDirty = false
 
   // When true, the web view and Syphon output are transparent instead of opaque white. Requires
   // the page itself to set a transparent background (e.g. `body { background: transparent }`);
@@ -78,23 +118,32 @@ final class Output: ObservableObject, Identifiable {
   // When false, capture is skipped while the Syphon server has no clients. No UI yet.
   @Published var captureWithoutClients: Bool { didSet { onConfigChange?() } }
 
-  // Backing scale factor (1x/2x) of the window hosting this output's web view. Set once the
-  // window is actually on screen (the pre-display value is unreliable) and kept current via
-  // didChangeBackingPropertiesNotification.
+  // The bookmark this output was last opened from, or nil if its URL came from somewhere else
+  // (`navigate(to:)`, a fresh default, OSC `/url`). Set only by `open(bookmark:)`; cleared by
+  // `navigate(to:)`. Reconciled by `AppModel.reconcileBookmarkIDs` when bookmarks change (delete,
+  // URL edit) so a stale id never outlives what it pointed to. Used by `liveBookmarkIDs` for the
+  // sidebar's live-bookmark matching.
+  @Published var bookmarkID: Int64? { didSet { onConfigChange?() } }
+
+  // Backing scale factor (1x/2x) of the window hosting this output's web view (OutputHost's
+  // window, which keeps it current as the host follows the main window between screens).
   @Published var backingScale: CGFloat = 2.0
 
   let stats: OutputStats
   // Set by AppModel to persist the outputs after a config change
   var onConfigChange: (() -> Void)?
 
+  // Trusts `config`: it must already be sanitized (`sanitizeOutputConfigs`), so name and URL are
+  // assigned as-is rather than re-normalized here.
   init(config: OutputConfig) {
     id = config.id
-    let trimmedName = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    name = trimmedName.isEmpty ? defaultSyphonName() : trimmedName
-    url = URL(string: config.url) ?? URL(string: defaultOutputURL)!
+    name = config.name
+    url = URL(string: config.url)!
     resolution = config.resolution
+    customSize = config.customSize
     transparentBackground = config.transparentBackground
     captureWithoutClients = config.captureWithoutClients
+    bookmarkID = config.bookmarkID
     stats = OutputStats()
     stats.output = self
     // Created with the final name up front (not renamed afterwards): QLab and other clients only
@@ -105,18 +154,35 @@ final class Output: ObservableObject, Identifiable {
 
   var config: OutputConfig {
     OutputConfig(
-      id: id, name: name, url: url.absoluteString, resolution: resolution,
-      transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients)
+      id: id, name: name, url: url.absoluteString, resolution: resolution, customSize: customSize,
+      transparentBackground: transparentBackground, captureWithoutClients: captureWithoutClients,
+      bookmarkID: bookmarkID)
+  }
+
+  // Effective output pixel size: the custom size if set, else the preset's.
+  var pixelSize: CGSize { customSize?.cgSize ?? resolution.pixelSize }
+
+  // Sets a validated custom size and rolls `resolution` to the nearest preset by pixel area, so
+  // a build that stops understanding `customSize` (rollback) still shows a sane preset size.
+  func setCustomSize(_ size: PixelSize) {
+    let area = size.width * size.height
+    resolution =
+      OutputResolution.allCases.min {
+        let areaA = Int($0.pixelSize.width * $0.pixelSize.height)
+        let areaB = Int($1.pixelSize.width * $1.pixelSize.height)
+        return abs(areaA - area) < abs(areaB - area)
+      } ?? .hd720
+    customSize = size
   }
 
   // Preview size in points: output pixels / backing scale, so the web view's CSS layout width
   // equals the output pixel width once `setLayoutScale` is applied.
   var previewSize: CGSize {
-    let pixels = resolution.pixelSize
+    let pixels = pixelSize
     return CGSize(width: pixels.width / backingScale, height: pixels.height / backingScale)
   }
 
-  // The live web view, set in WebView.makeNSView
+  // The live web view, owned by this output's OutputWebViewController (outputHost.swift)
   weak var webView: WKWebView?
 
   // Trims and adds http(s):// when there is no scheme. Shared so bookmark URLs compare equal to `url`.
@@ -143,11 +209,23 @@ final class Output: ObservableObject, Identifiable {
     return URL(string: (isLocal ? "http://" : "https://") + trimmed)
   }
 
-  // Normalizes a string and navigates the web view to it
+  // Normalizes a string and navigates the web view to it. For non-bookmark URLs only — clears
+  // `bookmarkID`. Bookmark-originated opens use `open(bookmark:)` instead, so the live-bookmark
+  // matching in the sidebar keeps working.
   func navigate(to urlString: String) {
     if let urlToNavigate = Output.normalizedURL(urlString) {
       url = urlToNavigate
+      bookmarkID = nil
     }
+  }
+
+  // Navigates to a bookmark's URL and records which bookmark it came from (`bookmarkID`), so the
+  // sidebar's live-bookmark matching (`liveBookmarkIDs`) can find it even after a later rename.
+  @available(macOS 14, *)
+  func open(bookmark: Bookmark) {
+    guard let urlToNavigate = Output.normalizedURL(bookmark.url) else { return }
+    url = urlToNavigate
+    bookmarkID = bookmark.id
   }
 
   func reload() {
@@ -204,6 +282,7 @@ final class Output: ObservableObject, Identifiable {
       flipped: false)
     commandBuffer.commit()
     stats.frameCount += 1
+    tileDirty = true
   }
 }
 
@@ -227,119 +306,5 @@ extension WKWebView {
     // 2 == _WKLayoutModeDynamicSizeComputedFromViewScale: layout size = view size / _viewScale
     setValue(2, forKey: "layoutMode")
     setValue(scale, forKey: "viewScale")
-  }
-}
-
-struct WebView: NSViewRepresentable {
-  @ObservedObject var state: Output
-
-  func makeNSView(context: Context) -> WKWebView {
-    // Created here, not as a stored property: the struct is rebuilt on every SwiftUI render, and a
-    // stored WKWebView would be allocated each time even though only this one is ever used.
-    let webView = WKWebView()
-    webView.navigationDelegate = context.coordinator
-    state.webView = webView
-    webView.load(URLRequest(url: state.url))
-    // Captured by AppModel's capture driver through `state.webView`
-    return webView
-  }
-
-  func printTimeElapsedWhenRunningCode(title: String, operation: () -> Void) {
-    let startTime = CFAbsoluteTimeGetCurrent()
-    operation()
-    let timeElapsed = CFAbsoluteTimeGetCurrent() - startTime
-    print("Time elapsed for \(title): \(timeElapsed) s.")
-  }
-
-  func updateNSView(_ nsView: WKWebView, context: Context) {
-    // Only reload if the URL has changed, save the new URL in state
-    if state.url.absoluteString != state.currentUrl?.absoluteString {
-      nsView.load(URLRequest(url: state.url))
-      state.currentUrl = state.url
-    }
-
-    // Apply background transparency to the live view. `drawsBackground` is undocumented KVC on WKWebView; guarded so
-    // an unrecognized key never crashes.
-    let coordinator = context.coordinator
-    if state.transparentBackground != coordinator.lastTransparentBackground {
-      if nsView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
-        nsView.setValue(!state.transparentBackground, forKey: "drawsBackground")
-      }
-      coordinator.lastTransparentBackground = state.transparentBackground
-    }
-
-    // Re-provision the texture/context/region and re-zoom the page whenever the output
-    // resolution or the screen's backing scale changes. Runs synchronously (no awaits), on the
-    // main actor, so a capture tick never observes a mismatched texture/context.
-    let pixelSize = state.resolution.pixelSize
-    guard pixelSize != coordinator.lastPixelSize || state.backingScale != coordinator.lastBackingScale
-    else {
-      return
-    }
-
-    state.initMetal(pixelWidth: Int(pixelSize.width), pixelHeight: Int(pixelSize.height))
-    nsView.setLayoutScale(1 / state.backingScale)
-    resizeWindow(nsView: nsView)
-    coordinator.lastPixelSize = pixelSize
-    coordinator.lastBackingScale = state.backingScale
-  }
-
-  // Resizes the window's content area to the new preview size + sidebar, keeping the top-left
-  // corner in place.
-  func resizeWindow(nsView: WKWebView) {
-    guard let window = nsView.window else { return }
-    let preview = state.previewSize
-    let newContentSize = CGSize(
-      width: preview.width + 200, height: preview.height + statusBarHeight)
-    let contentRect = window.contentRect(forFrameRect: window.frame)
-
-    var frame = window.frame
-    frame.size.width += newContentSize.width - contentRect.width
-    frame.size.height += newContentSize.height - contentRect.height
-    frame.origin.y -= newContentSize.height - contentRect.height
-    window.setFrame(frame, display: true)
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(self)
-  }
-
-  class Coordinator: NSObject, WKNavigationDelegate {
-    var parent: WebView
-    var lastPixelSize: CGSize?
-    var lastBackingScale: CGFloat?
-    var lastTransparentBackground: Bool = false
-
-    init(_ parent: WebView) {
-      self.parent = parent
-    }
-
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-      parent.state.loading = true
-      parent.state.loadError = nil
-      appLog("Loading URL: \(parent.state.url)")
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-      parent.state.loading = webView.isLoading
-      appLog("Done loading URL: \(parent.state.url)")
-    }
-
-    func webView(
-      _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error
-    ) {
-      parent.state.loading = webView.isLoading
-      parent.state.loadError = error.localizedDescription
-      appLog("Failed loading URL: \(parent.state.url) error: \(error)")
-    }
-
-    func webView(
-      _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-      withError error: Error
-    ) {
-      parent.state.loading = webView.isLoading
-      parent.state.loadError = error.localizedDescription
-      appLog("Failed provisional loading URL: \(parent.state.url) error: \(error)")
-    }
   }
 }

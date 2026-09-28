@@ -339,3 +339,170 @@ Deviations and interpretations in the phase 1 refactor:
 - Pre-existing, not fixed: `NSLog("Loading URL: \(url)")` etc. pass the URL as the format string,
   so `%` escapes in a URL are read as format specifiers (log shows `data:text/html,` for a
   percent-encoded data: URL).
+
+## Phase 2 notes (2026-09-26)
+
+Rendering host + capture driver (cluster 2):
+
+- `OutputHost` (`outputHost.swift`, retained by `AppDelegate`) owns one borderless alpha-0,
+  mouse-transparent, never-key `.screenSaver` window that follows the main window's screen. Every
+  output's `WKWebView` sits in it at (0,0), stacked; window size = largest view.
+  `OutputWebViewController` (one per output, retained by the host by id) owns the web view, is its
+  navigation delegate and owns its Combine subscriptions. The host diffs `model.$outputs` by id.
+- **The viewport-unit nudge (surprise 3) must run on a later runloop turn than
+  `setLayoutScale`.** Measured with a `100vw × 100vh` probe: nudging +1 pt and back synchronously
+  right after setting the SPI left vw/vh at 0; nudging on the next `DispatchQueue.main.async`
+  turn gives 1280×720 / 960×1080, and it holds across later navigations (OSC `/syphon/url`).
+- Pages report `devicePixelRatio` = 2 on a 2x screen (view = output px / 2 pt, `_viewScale` 0.5),
+  as in phase 1.
+- Host window origin: the screen's `visibleFrame` origin, pulled down/left only as far as needed to
+  stay on that screen. On a 1x screen a 1080p view (1920×1080 pt) covers the whole screen,
+  menu bar included; a custom size larger than the screen extends past it (partially offscreen:
+  untested).
+- Size/scale changes read the incoming values via `CombineLatest3(resolution, customSize,
+  backingScale)`, not the output's properties, because `@Published` emits on willSet.
+- Tile refresh uses a per-output `tileDirty` flag set by `captureFrame`, not `stats.frameCount`
+  (which the 1 s stats tick resets).
+- Main window gets `.miniaturizable` as well as `.resizable`, so the cover-proof check can minimise
+  it.
+- Smoke test (2 outputs, 1280×720 + custom 960×1080, M1 Max, 2x screen): both servers listed,
+  each delivered 301–302 frames in 5 s (60.2–60.4 fps) at its own size.
+
+### Phase 2 measurements (2026-09-26)
+
+Machine: MacBook Pro, M1 Max, macOS 15.7.9 (build 24G830). Branch `t3code/multi-output-phase2` at
+the tip present in the worktree (uncommitted `appModel.swift`/`outputHost.swift`/etc.), built with
+`swift build -c release` and `swift build` (debug). No product code was changed by this pass.
+
+**Environment caveat (discovered, not induced):** for this entire session both attached displays
+reported `Display Asleep: Yes` (`system_profiler SPDisplaysDataType`), and macOS reported the
+screen saver/lock state active throughout, despite `caffeinate -u`/`-d`. This was verified to be a
+pre-existing environmental condition, not a regression: running the untouched phase-0 spike binary
+(`/tmp/syphonweb-spike/spike case=alpha0all n=1 res=720`) in the same session reproduces
+`raf=0.0 fresh=0.0` while `pub=60.1` — i.e. the exact "screen locked" row already in the phase 0
+table above. Per that table, this is a documented, known-unsupported condition ("screen locked /
+display asleep... freezes... not tested"), not something phase 2 introduced. Consequence: every
+measurement below that depends on the page's own `requestAnimationFrame` loop (fresh fps) could
+not be captured live; **published fps (Syphon delivery) and CPU are unaffected** — the phase 0
+table shows these hold within 0.1 ms locked vs unlocked, and that held again here.
+
+**Method:** throwaway profile `--profile p2v`, `SYPHONWEB_DB_PATH=/tmp/sw-p2v.db`,
+`defaults write SyphonWeb.profile.p2v oscPort -int 9473`. Outputs seeded directly via
+`defaults write SyphonWeb.profile.p2v outputs -string '<json>'` (`captureWithoutClients: true`),
+each output's `url` a `data:text/html;base64,...` page reusing the phase 0 spike's rAF-counter
+page (25 bit cells + big text + moving block) or a flat-color static page for the OSC checks.
+Syphon client: a copy of the phase 0 spike (`/tmp/syphonweb-spike/client.swift`) with its server
+filter changed from `hasPrefix("Spike")` to `hasPrefix("P2VTest")` (this session's output names),
+compiled with the spec's `swiftc` recipe, plus two additions for this pass: a full-frame GPU-blit
++ `CGImage` PNG dump (`dumpfull=1`) and a full-frame alpha min/max scan (`alphastats=1`). CPU via
+`ps -o %cpu= -p <pid>`, sampled once per second during the client's measurement window.
+
+**Budget table** (published fps per output = Syphon client's `fps=`; CPU = `ps %cpu` samples,
+main SyphonWeb process only; fresh fps not measurable this session, see caveat above):
+
+| Outputs | Published fps (each) | Main-process CPU |
+|---|---|---|
+| 1 × 720p | 60.0 | ~31–35 % |
+| 2 × 720p | 60.2 / 60.2 | ~51–54 % |
+| 3 × 720p | 60.2 / 60.2 / 60.2 | ~73–76 % |
+| 1080p + 720p | 59.2 / 59.0 | ~79–82 % |
+| 1080p + custom 960×1080 | 55.3 / 55.3 | ~79–84 % |
+| 2 × 1080p | 33.3 / 33.3 | ~65–76 % |
+
+All rows: both/all servers listed by `SyphonServerDirectory`, each delivering independently, sizes
+confirmed via the client's reported texture dimensions (e.g. `960x1080` for the custom column).
+**Round robin fairness (2 × 1080p, over budget as expected):** both outputs delivered the same
+frame count (200/200 over 6 s) — the round-robin deadline is starving neither output, matching the
+design intent, though the absolute rate (33.3 fps) is well below phase 0's unlocked 54 fps figure
+for the same mix; the gap is consistent with this session's displays being asleep throughout
+(main-thread work under full occlusion competes differently) rather than a phase 2 regression —
+not re-verified with the display awake.
+
+**Cover-proof (decision 5):** not run as a discrete "before/after" test — the automated attempt to
+open and position a TextEdit window over the main window via `osascript`/System Events hung
+(likely gated on an Accessibility permission prompt with no one present to approve it); the
+process was killed and TextEdit quit without saving. Listed as unverified for the user. That said,
+every budget-table row above ran with both physical displays already asleep (full occlusion, the
+most extreme case in the phase 0 matrix) for its entire duration, and every server kept
+publishing at its expected rate throughout — so the "publish continues under full occlusion" half
+of decision 5 was exercised, incidentally, in every run; only the tile-freshness half needs the
+user to re-check with the screen awake.
+
+**Transparency:** one output, `transparentBackground: true`, a transparent-body test page.
+`alphastats` (full-frame min/max over the received `bgra8Unorm` texture): `minAlpha=0 maxAlpha=255`
+— the received texture has both fully transparent and fully opaque pixels. **Pass.**
+
+**OSC — legacy targeting by id, not position/index:**
+- Two outputs, `P2VTest1` (red, position 1) and `P2VTest2` (green, position 2), with
+  `legacyOutputID` set to `P2VTest2`'s id. `/syphon/url` (raw UDP, `,s` type tag) with a blue
+  page: `P2VTest2` (the legacy-by-id output, at position 2) turned blue; `P2VTest1` (position 1)
+  stayed red. Confirms targeting is by stored id, not array position. **Pass.**
+- `legacyOutputID` set to a UUID not present in `outputs`: `/syphon/url` logged
+  `"OSC: no legacy output, ignoring /syphon/url"` and neither output's content changed (no new
+  `Loading URL` log line). **Pass.**
+
+**Debug build self-checks:** `swift build` (debug) + launch logged, in order, `Bookmark label
+validation self-check passed`, `Outputs migration self-check passed`, `Outputs model self-check
+passed`. **Pass.**
+
+**Persistence (no rewrite of a clean or already-repaired config):**
+- Fresh profile's first launch migrated legacy keys to one output; relaunching with that same
+  `outputs` value unchanged (`defaults read ... outputs` byte-identical before/after, no "needed
+  repair" log line). **Pass.**
+- Seeded 5 outputs with 2 duplicate names (over `maxOutputs` and with a name collision);
+  relaunching logged `"Loaded \`outputs\` needed repair (cap/name/url/size/id); not saved this
+  session"`, and `defaults read ... outputs` was still byte-identical to what was seeded (the
+  repaired/truncated/deduped copy was never written back). **Pass.**
+
+**Unverified for the user (needs UI clicks, a second display, or an awake/unlocked screen this
+session couldn't provide):**
+- Tile grid: select, context menu (rename/duplicate/remove), `+` add, cap-at-4 disabling.
+- Settings: resolution preset/custom W×H apply flow, "capture without clients" toggle, per-output
+  section re-binding on selection change.
+- Cover-proof tile *freshness* specifically (vs. the publish-continues result above, which this
+  session did exercise) — re-run with the screen awake and unlocked.
+- Minimizing the main window (needs either a UI click or Accessibility-permission-gated
+  automation; not attempted after the TextEdit automation hung on what looks like the same gate).
+- A genuine full-screen app on another Space, and a second physical display — this Mac's second
+  reported display was also asleep/inaccessible for the same reason as the primary.
+- Screen lock / display sleep is already known-unsupported (freezes) per phase 0; not re-tested,
+  and ironically the whole of phase 2's live session ran inside that exact condition.
+
+**Cleanup:** `SyphonWeb.profile.p2v` defaults suite deleted, `/tmp/sw-p2v.db` removed, only the
+`SyphonWeb`/`client-p2v`/TextEdit/`osascript`/`caffeinate` processes started by this session were
+killed (no other `SyphonWeb` or Syphon-client processes were touched).
+
+### Phase 2 debugging: "upside down" and "1080 doesn't work" (2026-09-26)
+
+Displays awake, 4K HP Z27 at 1920×1080 pt (2x), Stage Manager on. Throwaway profile, test page with
+red box top-left ("TOP LEFT"), green top-right, blue bottom-left, a rAF counter and
+`innerWidth×innerHeight`. Syphon client dumps the received texture to PNG (memory row 0 first) and
+probes its corners. Evidence in `/tmp/sw-dbg/`.
+
+**Orientation: only the tiles were wrong, and only vertically (not mirrored).**
+- Received Syphon texture, phase 1 (`63cd9d0`, web view in `NSHostingView`) and phase 2 (host
+  window, plain contentView), 720p and 1080p: byte-identical corner probes — row 0 left = blue,
+  last row left = red, last row right = green. Row 0 is the page's **bottom**, which is the
+  bottom-up (GL) order Syphon clients expect; phase 1 was reported correct, so phase 2's Syphon
+  output was already correct. The flipped/unflipped superview does not matter: `layer.render(in:)`
+  draws the web view's layer in its own coordinate space.
+- Tiles made `makeImage()` of the same buffer. A `CGImage` is top-down, so the tile showed the page
+  upside down (text reads mirrored because it is vertically flipped; left/right were correct).
+- Fix: `makeTileImage` (appModel.swift) draws the capture into a small context flipped. Syphon
+  path untouched. DEBUG self-check asserts the orientation and the size cap.
+
+**1080: no hard failure reproduced; one 1080-specific phase 2 regression found and fixed.**
+- Works: launch at 1080 (60 fps, 1920×1080, `innerWidth` 1920×1080, fresh); 1080 + 720; runtime
+  720 → 1080 → 720 → 1080 with a client connected throughout (texture size follows within one
+  frame, no freeze); runtime-added and duplicated outputs; real pages. Host window resizes to
+  960×540 pt at the bottom-left of the visible frame.
+- Regression: the tile refresh kept a full-size `makeImage()` alive, so the next capture copied the
+  whole buffer (copy-on-write) and SwiftUI uploaded a full-size image, 15×/s per output. 1080p +
+  720p (orient page, release) fell to **45 fps** with tiles vs **60** with the tile refresh
+  disabled. Downscaled tiles (≤ 640 px wide, `.none` interpolation, snapshot released before the
+  next capture): **60/60** release and debug; `.low` interpolation gave 58.
+- Page cost dominates at 1080: apple.com alone at 1080 publishes 30 fps in **phase 1 and phase 2
+  alike** (heavy page, not a regression). 2 × 1080 + 720 = 30 fps each (over budget, as the spike
+  table says).
+- Unverified: whatever the user saw at 1080 if it was not low fps (Settings picker not clicked by
+  an agent; the hook that drove the same `resolution`/`customSize` assignments worked).

@@ -1,7 +1,17 @@
+import Combine
 import Foundation
+import CoreGraphics
 import Metal
 
 let defaultOutputURL = "https://puppy.surf"
+
+// Hard cap on the number of outputs (phase 2 decision 2). Not derived from measurement of what's
+// actually fast — see the spike table in docs/multi-output-spec.md for the supported mixes.
+let maxOutputs = 4
+
+// Names that OSC scoped addresses (phase 4) reserve for command words, so they can never collide
+// with an output name. Enforced now (phase 2) so an output can't be renamed into one later.
+let reservedOutputNames = ["url", "bookmark", "refresh"]
 
 // Per-profile (appDefaults) keys for the outputs model
 private let outputsKey = "outputs"
@@ -19,14 +29,162 @@ struct OutputConfig: Codable, Equatable, Sendable {
   var name: String
   var url: String
   var resolution: OutputResolution
+  // Custom W×H (decision 6). Declared `Optional` so the synthesized `Codable` conformance
+  // encodes it with `encodeIfPresent` (omitted entirely when nil — phase 1 JSON for preset-only
+  // outputs stays byte-identical) and decodes it with `decodeIfPresent` (missing key on old JSON
+  // decodes to nil, not a decode failure). An out-of-bounds size still decodes successfully here
+  // (see `PixelSize`'s comment) — `sanitizeOutputConfigs` is what drops it.
+  var customSize: PixelSize?
   var transparentBackground: Bool
   var captureWithoutClients: Bool
+  // The bookmark this output was last opened from (`Output.open(bookmark:)`), or nil if its URL
+  // was set some other way (`navigate(to:)`, OSC `/url`, a fresh default). `Optional` for the same
+  // reason as `customSize`: omitted entirely when nil so phase 1/2 JSON stays byte-identical, and
+  // missing on old JSON decodes to nil rather than failing.
+  var bookmarkID: Int64?
 
   static func makeDefault(id: UUID = UUID(), name: String = defaultSyphonName()) -> OutputConfig {
     OutputConfig(
       id: id, name: name, url: defaultOutputURL, resolution: .hd720, transparentBackground: false,
-      captureWithoutClients: true)
+      captureWithoutClients: true, bookmarkID: nil)
   }
+}
+
+// The OSC slug rule (spec "OSC" section, reused here since output names ARE the slugs): only
+// letters, numbers, `-` and `_`, non-empty, at most 64 characters, and not all-digits (an
+// all-digit name would collide with the 1-based OSC index). Doesn't check reserved words or
+// uniqueness — those are separate concerns (`validateOutputName`). Used by the UI (cluster 3) to
+// show a "rename to address by name over OSC" hint on grandfathered pre-slug names, and will be
+// used by the OSC route resolver (cluster 2) for the same rule.
+func isOSCAddressableName(_ name: String) -> Bool {
+  guard !name.isEmpty, name.count <= 64, !name.allSatisfy(\.isNumber) else { return false }
+  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+  return name.allSatisfy(allowed.contains)
+}
+
+// Pure check for a rename/add/duplicate: trimmed, matches the OSC slug rule, not one of the
+// reserved command words, and unique case-insensitively among `existing` (the OTHER outputs'
+// names — the caller excludes the output being renamed). Returns an error message, or nil if
+// `name` is valid as-is. Pre-slug names loaded from disk (phase 1/2, e.g. "SyphonWeb left") are
+// grandfathered in `sanitizeOutputConfigs`/migration, which never call this — it only gates NEW
+// names.
+func validateOutputName(_ name: String, existing: [String]) -> String? {
+  let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return "Name can't be empty" }
+  if !isOSCAddressableName(trimmed) {
+    return "Names may only contain letters, numbers, - and _, up to 64 characters, and can't be only numbers"
+  }
+  if reservedOutputNames.contains(trimmed.lowercased()) {
+    return "\"\(trimmed)\" is a reserved name"
+  }
+  if existing.contains(where: { $0.lowercased() == trimmed.lowercased() }) {
+    return "An output named \"\(trimmed)\" already exists"
+  }
+  return nil
+}
+
+// `base` if it doesn't collide (case-insensitively) with anything in `existing`, else
+// "<base>-2", "<base>-3", ... until one doesn't. Hyphenated (not space-separated) so a unique
+// default/duplicate name is always OSC-addressable when `base` already is.
+func uniqueOutputName(base: String, existing: [String]) -> String {
+  let existingLower = Set(existing.map { $0.lowercased() })
+  guard existingLower.contains(base.lowercased()) else { return base }
+  var suffix = 2
+  while existingLower.contains("\(base)-\(suffix)".lowercased()) { suffix += 1 }
+  return "\(base)-\(suffix)"
+}
+
+// Replaces every character outside the OSC slug alphabet with "-". Used by `defaultOutputBaseName`
+// so newly generated output names are always OSC-addressable, regardless of profile name.
+func slugForOutputName(_ name: String) -> String {
+  let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+  return String(name.map { allowed.contains($0) ? $0 : "-" })
+}
+
+// Base name for newly added/default outputs: a slug of `defaultSyphonName()` (e.g. "SyphonWeb
+// left" -> "SyphonWeb-left"), so `uniqueOutputName(base: defaultOutputBaseName(), ...)` always
+// produces an OSC-addressable name.
+func defaultOutputBaseName() -> String { slugForOutputName(defaultSyphonName()) }
+
+// Repairs a loaded/decoded `[OutputConfig]` so an `Output` can always be built from the result:
+// truncates to `maxOutputs`, fixes blank/duplicate/reserved names, unparseable URLs, duplicate
+// UUIDs, and out-of-bounds `customSize` (dropped, since decoding lets one through — see
+// `PixelSize`). `repaired` is true iff anything above actually changed, telling the caller not to
+// persist a repaired copy over whatever's actually stored.
+func sanitizeOutputConfigs(
+  _ configs: [OutputConfig], defaultName: String
+) -> (configs: [OutputConfig], repaired: Bool) {
+  var repaired = configs.count > maxOutputs
+  var result = Array(configs.prefix(maxOutputs))
+
+  var usedNames: [String] = []
+  var usedIDs: Set<UUID> = []
+
+  for i in result.indices {
+    var config = result[i]
+
+    if usedIDs.contains(config.id) {
+      config.id = UUID()
+      repaired = true
+    }
+    usedIDs.insert(config.id)
+
+    let trimmedName = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidateName = trimmedName.isEmpty ? defaultName : trimmedName
+    let finalName = uniqueOutputName(base: candidateName, existing: usedNames + reservedOutputNames)
+    if finalName != config.name {
+      config.name = finalName
+      repaired = true
+    }
+    usedNames.append(finalName)
+
+    let trimmedURL = config.url.trimmingCharacters(in: .whitespacesAndNewlines)
+    let finalURL = (!trimmedURL.isEmpty && URL(string: trimmedURL) != nil) ? trimmedURL : defaultOutputURL
+    if finalURL != config.url {
+      config.url = finalURL
+      repaired = true
+    }
+
+    if let customSize = config.customSize,
+      PixelSize(width: customSize.width, height: customSize.height) == nil
+    {
+      config.customSize = nil
+      repaired = true
+    }
+
+    result[i] = config
+  }
+
+  return (result, repaired)
+}
+
+// Capture order for one tick: `ids` rotated to start at `startID` (the first output the previous
+// tick didn't reach), or `ids` as-is if `startID` is nil or no longer present (removed output).
+func captureOrder(ids: [UUID], startID: UUID?) -> [UUID] {
+  guard let startID, let start = ids.firstIndex(of: startID) else { return ids }
+  return Array(ids[start...] + ids[..<start])
+}
+
+// Pure matcher for "which bookmarks are live in which outputs" (the sidebar's globe icon,
+// cluster 3). Per output: `bookmarkID` wins outright if set (even if that id no longer appears in
+// `bookmarks` — the caller just won't find a row to mark); otherwise the FIRST bookmark in
+// `bookmarks` order whose normalized URL equals the output's `url` is used. Either way, at most
+// one bookmark is ever live per output. `bookmarks` must already be in sidebar order (favorites
+// first, then the rest, each in `Bookmark.getAll()` order) for the "first match" rule to line up
+// with what the UI shows. Output lists in the result are in `outputs` order.
+func liveBookmarkIDs(
+  outputs: [(id: UUID, url: URL, bookmarkID: Int64?)],
+  bookmarks: [(id: Int64, url: String)]
+) -> [Int64: [UUID]] {
+  var result: [Int64: [UUID]] = [:]
+  for output in outputs {
+    let liveID =
+      output.bookmarkID ?? bookmarks.first { Output.normalizedURL($0.url) == output.url }?.id
+    if let liveID {
+      result[liveID, default: []].append(output.id)
+    }
+  }
+  return result
 }
 
 func encodeOutputs(_ configs: [OutputConfig]) -> String {
@@ -59,7 +217,7 @@ struct OutputsLoad: Equatable {
 //   output in memory, nothing written (kept for inspection/rollback).
 // - No `outputs` and no marker: build output #1 (the legacy output) from the legacy keys.
 func migrateOutputs(
-  defaults: UserDefaults, defaultName: String = defaultSyphonName(), newID: UUID = UUID()
+  defaults: UserDefaults, defaultName: String = defaultOutputBaseName(), newID: UUID = UUID()
 ) -> OutputsLoad {
   let storedLegacyID = defaults.string(forKey: legacyOutputIDKey).flatMap(UUID.init(uuidString:))
   let stored = defaults.object(forKey: outputsKey)
@@ -100,7 +258,7 @@ func migrateOutputs(
 // only then `legacyOutputID` + `outputsMigrationVersion = 1`. A failed read-back leaves the
 // marker unset so the next launch retries. `write` is injectable for the self-check.
 func loadOutputs(
-  defaults: UserDefaults, defaultName: String = defaultSyphonName(),
+  defaults: UserDefaults, defaultName: String = defaultOutputBaseName(),
   write: ((String) -> Void)? = nil
 ) -> OutputsLoad {
   let load = migrateOutputs(defaults: defaults, defaultName: defaultName)
@@ -128,7 +286,6 @@ func loadOutputs(
 // single capture driver.
 @MainActor
 final class AppModel: ObservableObject {
-  // Phase 1: exactly one output
   @Published private(set) var outputs: [Output]
   @Published var selectedOutputID: UUID
   // Target of the legacy (unscoped) OSC addresses. Never retargeted to another output.
@@ -144,6 +301,12 @@ final class AppModel: ObservableObject {
   private let defaults: UserDefaults
   private let persistOutputs: Bool
   private var captureTimer: Timer?
+  private var tileTimer: Timer?
+  // First output the last tick didn't reach before the deadline; nil when every output was captured
+  private var nextCaptureID: UUID?
+  // Spike budget rule: past ~12 ms of capture per tick, the pages' own rAF and WebKit commits starve
+  private let captureDeadline: TimeInterval = 0.012
+  private var cancellables: Set<AnyCancellable> = []
 
   init(defaults: UserDefaults = appDefaults) {
     self.defaults = defaults
@@ -155,12 +318,13 @@ final class AppModel: ObservableObject {
     var persist = load.persist
     if configs.isEmpty {
       appLog("`outputs` is empty; using one default output in memory (not saved)")
-      configs = [.makeDefault()]
+      configs = [.makeDefault(name: defaultOutputBaseName())]
       persist = false
-    } else if configs.count > 1 {
-      // ponytail: phase 1 runs one output; saving would drop the rest, so don't
-      appLog("`outputs` has \(configs.count) outputs; this version runs one (not saved)")
-      configs = [configs.first { $0.id == load.legacyID } ?? configs[0]]
+    }
+    let sanitized = sanitizeOutputConfigs(configs, defaultName: defaultOutputBaseName())
+    configs = sanitized.configs
+    if sanitized.repaired {
+      appLog("Loaded `outputs` needed repair (cap/name/url/size/id); not saved this session")
       persist = false
     }
     if !persist { appLog("Output settings changes will not be saved this session") }
@@ -172,6 +336,15 @@ final class AppModel: ObservableObject {
     selectedOutputID = outputs[0].id
     for output in outputs {
       output.onConfigChange = { [weak self] in self?.saveOutputs() }
+    }
+
+    // Bookmarks require macOS 14 (`@Observable`); the app itself only runs on macOS 14+ (see
+    // main.swift's `#available` gate), so this always runs in practice.
+    if #available(macOS 14, *) {
+      reconcileBookmarkIDs(Bookmark.getAll())
+      bookmarksDidChangePublisher
+        .sink { [weak self] _ in self?.reconcileBookmarkIDs(Bookmark.getAll()) }
+        .store(in: &cancellables)
     }
   }
 
@@ -188,8 +361,94 @@ final class AppModel: ObservableObject {
     defaults.set(encodeOutputs(outputs.map(\.config)), forKey: outputsKey)
   }
 
+  // Adds a new output with a default config (720p, default URL) and a unique default-based name
+  // ("SyphonWeb", "SyphonWeb-2", …). Nil at `maxOutputs`.
+  @discardableResult
+  func addOutput() -> Output? {
+    guard outputs.count < maxOutputs else { return nil }
+    let name = uniqueOutputName(
+      // Prefix leaves room for a "-N" suffix within the 64-character name limit
+      base: String(defaultOutputBaseName().prefix(60)),
+      existing: outputs.map(\.name) + reservedOutputNames)
+    let output = Output(config: .makeDefault(name: name))
+    output.onConfigChange = { [weak self] in self?.saveOutputs() }
+    outputs.append(output)
+    saveOutputs()
+    return output
+  }
+
+  // Copies url/resolution/customSize/transparent/captureWithoutClients from `id`'s output into a
+  // new one named "<name>-copy" (made unique). Nil if `id` doesn't exist or at `maxOutputs`.
+  @discardableResult
+  func duplicateOutput(_ id: UUID) -> Output? {
+    guard outputs.count < maxOutputs, let source = outputs.first(where: { $0.id == id }) else {
+      return nil
+    }
+    var config = source.config
+    config.id = UUID()
+    config.bookmarkID = nil
+    config.name = uniqueOutputName(
+      // Slugged (a grandfathered source name may have spaces) and trimmed so "-copy-N" fits in 64
+      base: "\(slugForOutputName(source.name).prefix(54))-copy",
+      existing: outputs.map(\.name) + reservedOutputNames)
+    let output = Output(config: config)
+    output.onConfigChange = { [weak self] in self?.saveOutputs() }
+    outputs.append(output)
+    saveOutputs()
+    return output
+  }
+
+  // Refuses to remove the last output. Stops the removed output's Syphon server; selection moves
+  // to the neighbour at the same index (clamped) if the removed output was selected.
+  // `legacyOutputID` is untouched (a `let`): unscoped OSC then logs "no legacy output" rather than
+  // silently retargeting.
+  func removeOutput(_ id: UUID) {
+    guard outputs.count > 1, let index = outputs.firstIndex(where: { $0.id == id }) else { return }
+    outputs[index].frameServer?.stop()
+    outputs.remove(at: index)
+    if selectedOutputID == id {
+      selectedOutputID = outputs[min(index, outputs.count - 1)].id
+    }
+    saveOutputs()
+  }
+
+  // Validates `newName` against the OTHER outputs, then trims and assigns it (which recreates the
+  // output's Syphon server via `Output.name`'s `didSet`). Returns an error message, or nil on
+  // success. This is the only path that should rename an output; assigning `Output.name` directly
+  // skips validation.
+  @discardableResult
+  func renameOutput(_ id: UUID, to newName: String) -> String? {
+    guard let output = outputs.first(where: { $0.id == id }) else { return "Output not found" }
+    let others = outputs.filter { $0.id != id }.map(\.name)
+    if let error = validateOutputName(newName, existing: others) { return error }
+    output.name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+    saveOutputs()
+    return nil
+  }
+
+  // Clears any output's `bookmarkID` whose bookmark is gone or whose URL no longer matches (the
+  // bookmark was deleted, or its URL was edited elsewhere). Called at launch and on every
+  // `bookmarksDidChangePublisher` event (delete, URL edit, another profile's changes) so a stale
+  // `bookmarkID` never outlives what it pointed to.
+  @available(macOS 14, *)
+  func reconcileBookmarkIDs(_ bookmarks: [Bookmark]) {
+    var changed = false
+    for output in outputs {
+      guard let bookmarkID = output.bookmarkID else { continue }
+      let stillMatches = bookmarks.contains {
+        $0.id == bookmarkID && Output.normalizedURL($0.url) == output.url
+      }
+      if !stillMatches {
+        output.bookmarkID = nil
+        changed = true
+      }
+    }
+    if changed { saveOutputs() }
+  }
+
   // One 60 Hz driver for all outputs, in `.common` mode so capture keeps running during menu
-  // tracking and window drags (the old per-view timer ran in the default mode and paused).
+  // tracking and window drags (the old per-view timer ran in the default mode and paused). Plus a
+  // 15 Hz tile refresh for the main window's previews.
   func startCapture() {
     guard captureTimer == nil else { return }
     let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
@@ -197,31 +456,78 @@ final class AppModel: ObservableObject {
     }
     RunLoop.main.add(timer, forMode: .common)
     captureTimer = timer
+
+    let tiles = Timer(timeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.refreshTiles() }
+    }
+    RunLoop.main.add(tiles, forMode: .common)
+    tileTimer = tiles
   }
 
+  // Round robin with a deadline: starts at the output the last tick didn't reach and stops
+  // before the next capture once the deadline has passed, so one heavy output can't starve the
+  // rest. The first capture always runs, even if it alone exceeds the deadline.
   private func captureOutputs() {
-    for output in outputs {
-      output.captureFrame(commandQueue: commandQueue)
+    let start = ProcessInfo.processInfo.systemUptime
+    let order = captureOrder(ids: outputs.map(\.id), startID: nextCaptureID)
+    nextCaptureID = nil
+    for (i, id) in order.enumerated() {
+      if i > 0, ProcessInfo.processInfo.systemUptime - start >= captureDeadline {
+        nextCaptureID = id
+        return
+      }
+      outputs.first { $0.id == id }?.captureFrame(commandQueue: commandQueue)
+    }
+  }
+
+  private func refreshTiles() {
+    for output in outputs where output.tileDirty {
+      output.tileDirty = false
+      output.previewImage = output.graphicsContext.flatMap(makeTileImage)
     }
   }
 }
 
+// Width cap for tile images, in pixels: tiles are ~260 pt wide, 2x
+let tileImageMaxWidth = 640
+
+// Small upright copy of a capture context for a tile. The capture buffer is bottom-up (row 0 is
+// the page's bottom, as Syphon expects), so it is drawn flipped. Downscaled rather than kept as a
+// full-size `makeImage()`: a full-size image alive at the next capture makes that capture copy
+// the whole buffer (copy-on-write) and SwiftUI upload it; 1080p + 720p dropped from 60 to 45 fps.
+// The snapshot here is released before the next capture, so it never copies.
+func makeTileImage(_ context: CGContext) -> CGImage? {
+  guard let snapshot = context.makeImage() else { return nil }
+  let width = min(context.width, tileImageMaxWidth)
+  let height = max(1, context.height * width / context.width)
+  guard
+    let tile = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+  else { return nil }
+  tile.interpolationQuality = .none
+  tile.translateBy(x: 0, y: CGFloat(height))
+  tile.scaleBy(x: 1, y: -1)
+  tile.draw(snapshot, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return tile.makeImage()
+}
+
 #if DEBUG
+  // A suite named by absolute path is a plist at that path, so nothing lands in
+  // ~/Library/Preferences (cfprefsd leaves an empty plist there even after
+  // removePersistentDomain). Shared by both self-checks below.
+  private func withSuite(_ body: (UserDefaults) -> Void) {
+    let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(
+      "SyphonWeb.selfcheck.\(UUID().uuidString)")
+    let defaults = UserDefaults(suiteName: path)!
+    body(defaults)
+    defaults.removePersistentDomain(forName: path)
+    try? FileManager.default.removeItem(atPath: path + ".plist")
+  }
+
   // Runs at launch in debug builds; traps if outputs migration regresses. Each case uses its own
   // throwaway suite, removed afterwards.
   func checkOutputsMigration() {
-    // A suite named by absolute path is a plist at that path, so nothing lands in
-    // ~/Library/Preferences (cfprefsd leaves an empty plist there even after
-    // removePersistentDomain).
-    func withSuite(_ body: (UserDefaults) -> Void) {
-      let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(
-        "SyphonWeb.selfcheck.\(UUID().uuidString)")
-      let defaults = UserDefaults(suiteName: path)!
-      body(defaults)
-      defaults.removePersistentDomain(forName: path)
-      try? FileManager.default.removeItem(atPath: path + ".plist")
-    }
-
     // Legacy keys -> one output, written, read back, marker + legacy ID set, legacy keys kept
     withSuite { d in
       d.set("  Mig Name ", forKey: legacySyphonNameKey)
@@ -301,5 +607,181 @@ final class AppModel: ObservableObject {
     }
 
     appLog("Outputs migration self-check passed")
+  }
+
+  // Runs at launch in debug builds; traps if the phase 2 model (naming, sanitize, custom size
+  // JSON shape) regresses. Pure logic only — no `Output`/`AppModel` construction, which would
+  // create real Syphon servers.
+  func checkOutputsModel() {
+    // validateOutputName: empty, whitespace, duplicate (case-insensitive), reserved, valid
+    precondition(validateOutputName("", existing: []) != nil)
+    precondition(validateOutputName("   ", existing: []) != nil)
+    precondition(validateOutputName("Main", existing: ["main"]) != nil)
+    precondition(validateOutputName("URL", existing: []) != nil)
+    precondition(validateOutputName("bookmark", existing: []) != nil)
+    precondition(validateOutputName("Refresh", existing: []) != nil)
+    precondition(validateOutputName("  Toast  ", existing: ["Main"]) == nil)
+    // validateOutputName: slug rule (chars, all-digits, max 64)
+    precondition(validateOutputName("My Output", existing: []) != nil, "space not allowed")
+    precondition(validateOutputName("123", existing: []) != nil, "all-digits not allowed")
+    precondition(
+      validateOutputName(String(repeating: "a", count: 65), existing: []) != nil, "over 64 chars")
+    precondition(
+      validateOutputName(String(repeating: "a", count: 64), existing: []) == nil, "64 chars is ok")
+    precondition(validateOutputName("My-Output_1", existing: []) == nil)
+
+    // isOSCAddressableName: the slug rule alone, no reserved/uniqueness check
+    precondition(isOSCAddressableName("Main"))
+    precondition(isOSCAddressableName("a1"))
+    precondition(!isOSCAddressableName(""))
+    precondition(!isOSCAddressableName("SyphonWeb left"), "space")
+    precondition(!isOSCAddressableName("123"), "all digits")
+    precondition(!isOSCAddressableName(String(repeating: "a", count: 65)), "over 64 chars")
+    precondition(isOSCAddressableName(String(repeating: "a", count: 64)))
+    // isOSCAddressableName doesn't reject reserved words or check uniqueness (separate concerns)
+    precondition(isOSCAddressableName("url"))
+
+    // slugForOutputName / defaultOutputBaseName
+    precondition(slugForOutputName("SyphonWeb left") == "SyphonWeb-left")
+    precondition(slugForOutputName("a/b c") == "a-b-c")
+    precondition(isOSCAddressableName(defaultOutputBaseName()), "must always be a valid slug")
+
+    // uniqueOutputName: "-N" suffix (not " N"), so a unique/default name is always slug-shaped
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: []) == "SyphonWeb")
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb"]) == "SyphonWeb-2")
+    precondition(
+      uniqueOutputName(base: "SyphonWeb", existing: ["SyphonWeb", "SyphonWeb-2"]) == "SyphonWeb-3")
+    precondition(uniqueOutputName(base: "SyphonWeb", existing: ["syphonweb"]) == "SyphonWeb-2")
+
+    // Grandfathering: a unique non-slug name (e.g. legacy "SyphonWeb left") loads as-is, not
+    // treated as needing repair — sanitize only touches blank/duplicate/reserved names, never the
+    // slug rule.
+    let grandfathered = [OutputConfig.makeDefault(name: "SyphonWeb left")]
+    let keptAsIs = sanitizeOutputConfigs(grandfathered, defaultName: "Default")
+    precondition(!keptAsIs.repaired && keptAsIs.configs[0].name == "SyphonWeb left")
+    // ...but duplicates of a grandfathered name are still deduped like any other name
+    let dupNonSlug = [
+      OutputConfig.makeDefault(name: "SyphonWeb left"), OutputConfig.makeDefault(name: "SyphonWeb left"),
+    ]
+    let dedupedNonSlug = sanitizeOutputConfigs(dupNonSlug, defaultName: "Default")
+    precondition(dedupedNonSlug.repaired && Set(dedupedNonSlug.configs.map(\.name)).count == 2)
+
+    // OutputConfig JSON: preset-only omits `customSize`/`bookmarkID` (phase 1/2 shape, byte-identical)
+    let preset = OutputConfig.makeDefault(name: "Preset")
+    let presetJSON = encodeOutputs([preset])
+    precondition(!presetJSON.contains("customSize") && !presetJSON.contains("bookmarkID"))
+    precondition(decodeOutputs(presetJSON) == [preset])
+
+    // customSize round-trips
+    var custom = preset
+    custom.customSize = PixelSize(width: 960, height: 1080)
+    let customJSON = encodeOutputs([custom])
+    precondition(customJSON.contains("customSize"))
+    precondition(decodeOutputs(customJSON) == [custom])
+
+    // bookmarkID round-trips, omitted when nil
+    var withBookmark = preset
+    withBookmark.bookmarkID = 42
+    let withBookmarkJSON = encodeOutputs([withBookmark])
+    precondition(withBookmarkJSON.contains("bookmarkID"))
+    precondition(decodeOutputs(withBookmarkJSON) == [withBookmark])
+
+    // liveBookmarkIDs: explicit bookmarkID wins outright (even pointing at a deleted bookmark);
+    // nil bookmarkID falls back to the FIRST bookmark (in order) whose URL matches
+    let (o1, o2, o3) = (UUID(), UUID(), UUID())
+    let urlA = Output.normalizedURL("https://a.example")!
+    let urlB = Output.normalizedURL("https://b.example")!
+    let live = liveBookmarkIDs(
+      outputs: [
+        (id: o1, url: urlA, bookmarkID: 1),
+        (id: o2, url: urlA, bookmarkID: nil),
+        (id: o3, url: urlB, bookmarkID: 99),
+      ],
+      bookmarks: [(id: 1, url: "https://a.example"), (id: 2, url: "https://a.example")])
+    precondition(live[1] == [o1, o2], "bookmarkID match and URL-fallback match both key id 1")
+    precondition(live[99] == [o3], "bookmarkID keys the result even with no matching bookmark row")
+    precondition(live[2] == nil, "second duplicate-URL bookmark never wins the fallback")
+
+    // Out-of-bounds customSize decodes (doesn't fail the whole array) and sanitize drops it
+    let badJSON = """
+      [{"id":"\(UUID().uuidString)","name":"Bad","url":"\(defaultOutputURL)",\
+      "resolution":"hd720","customSize":{"width":99999,"height":5000},\
+      "transparentBackground":false,"captureWithoutClients":true}]
+      """
+    guard let badConfigs = decodeOutputs(badJSON) else {
+      preconditionFailure("out-of-bounds customSize should decode, not fail the array")
+    }
+    precondition(badConfigs[0].customSize?.width == 99999)
+    let sanitizedBad = sanitizeOutputConfigs(badConfigs, defaultName: "Default")
+    precondition(sanitizedBad.repaired && sanitizedBad.configs[0].customSize == nil)
+
+    // sanitize: truncates to maxOutputs and marks repaired
+    let five = (1...5).map { OutputConfig.makeDefault(name: "Out \($0)") }
+    let capped = sanitizeOutputConfigs(five, defaultName: "Default")
+    precondition(capped.configs.count == maxOutputs && capped.repaired)
+
+    // sanitize: duplicate names made unique (case-insensitive)
+    let dupNames = [OutputConfig.makeDefault(name: "Dup"), OutputConfig.makeDefault(name: "dup")]
+    let dedupedNames = sanitizeOutputConfigs(dupNames, defaultName: "Default")
+    precondition(dedupedNames.repaired && Set(dedupedNames.configs.map(\.name)).count == 2)
+
+    // sanitize: duplicate UUIDs given fresh ids
+    let sharedID = UUID()
+    let dupIDs = [
+      OutputConfig.makeDefault(id: sharedID, name: "A"),
+      OutputConfig.makeDefault(id: sharedID, name: "B"),
+    ]
+    let dedupedIDs = sanitizeOutputConfigs(dupIDs, defaultName: "Default")
+    precondition(dedupedIDs.repaired && Set(dedupedIDs.configs.map(\.id)).count == 2)
+
+    // sanitize: unparseable/blank URL replaced with the default
+    var badURL = OutputConfig.makeDefault(name: "BadURL")
+    badURL.url = ""
+    let fixedURL = sanitizeOutputConfigs([badURL], defaultName: "Default")
+    precondition(fixedURL.repaired && fixedURL.configs[0].url == defaultOutputURL)
+
+    // sanitize: clean input passes through unchanged, not repaired
+    let clean = [OutputConfig.makeDefault(name: "Clean1"), OutputConfig.makeDefault(name: "Clean2")]
+    let cleaned = sanitizeOutputConfigs(clean, defaultName: "Default")
+    precondition(!cleaned.repaired && cleaned.configs == clean)
+
+    // Loading a suite with 2 stored outputs keeps both (no phase 1 "keep one" truncation)
+    withSuite { d in
+      let two = encodeOutputs([.makeDefault(name: "One"), .makeDefault(name: "Two")])
+      d.set(two, forKey: outputsKey)
+      let load = loadOutputs(defaults: d, defaultName: "Default")
+      precondition(load.persist && load.configs.count == 2)
+      let sanitizedTwo = sanitizeOutputConfigs(load.configs, defaultName: "Default")
+      precondition(!sanitizedTwo.repaired && sanitizedTwo.configs.count == 2)
+    }
+
+    // captureOrder: no/unknown start (e.g. the cursor's output was removed) -> as-is; rotation
+    let (a, b, c) = (UUID(), UUID(), UUID())
+    precondition(captureOrder(ids: [a, b, c], startID: nil) == [a, b, c])
+    precondition(captureOrder(ids: [a, b, c], startID: a) == [a, b, c])
+    precondition(captureOrder(ids: [a, b, c], startID: c) == [c, a, b])
+    precondition(captureOrder(ids: [a, b, c], startID: b) == [b, c, a])
+    precondition(captureOrder(ids: [a, c], startID: b) == [a, c])
+    precondition(captureOrder(ids: [], startID: a) == [])
+
+    // makeTileImage: capture buffer row 0 is the page's bottom, so the tile's first row must be
+    // the buffer's last row (red here), and the size is capped at tileImageMaxWidth
+    let capture = CGContext(
+      data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let pixels = capture.data!.assumingMemoryBound(to: UInt8.self)
+    for (i, byte) in [0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255].enumerated() {
+      pixels[i] = UInt8(byte)  // memory row 0 blue (page bottom), row 1 red (page top)
+    }
+    let tile = makeTileImage(capture)!
+    let tileBytes = CFDataGetBytePtr(tile.dataProvider!.data)!
+    precondition(tileBytes[0] == 255 && tileBytes[2] == 0, "tile image is upside down")
+    let wide = CGContext(
+      data: nil, width: 1920, height: 1080, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let wideTile = makeTileImage(wide)!
+    precondition(wideTile.width == tileImageMaxWidth && wideTile.height == 360)
+
+    appLog("Outputs model self-check passed")
   }
 #endif

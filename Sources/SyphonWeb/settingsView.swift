@@ -1,56 +1,22 @@
+import Combine
 import SwiftUI
 
-// One documented OSC address for the "OSC Commands" reference list.
-private struct OSCCommandInfo: Identifiable {
-  let id: String
-  let args: String
-  let description: String
-}
-
-private let oscCommands: [OSCCommandInfo] = [
-  OSCCommandInfo(id: "/syphon/url", args: "string", description: "Load a URL (https:// added if no scheme is given)."),
-  OSCCommandInfo(
-    id: "/syphon/bookmark", args: "string or int",
-    description: "Load a bookmark by OSC label or name (string), or by 1-based sidebar position (int/float)."
-  ),
-  OSCCommandInfo(id: "/syphon/bookmark/<label>", args: "none", description: "Load the bookmark with this OSC label."),
-  OSCCommandInfo(id: "/syphon/refresh", args: "none", description: "Reload the current page."),
-]
-
+// Global settings only (phase 3, cluster 3): instances, OSC port, and the full OSC command
+// reference (from `oscCommandReference(outputs:)`, cluster 2/oscServer.swift) plus per-bookmark
+// label entries. Per-output settings (name, resolution, appearance) live in each tile's
+// `OutputSettingsPopover` (outputTiles.swift) instead.
 @available(macOS 14, *)
 struct SettingsView: View {
-  let model: AppModel
-  // The selected output (phase 1: the only one); name, resolution and transparency edit its config
-  @ObservedObject var state: Output
+  @ObservedObject var model: AppModel
   @ObservedObject var oscController: OSCController
 
   @State private var portText: String = ""
   @State private var portError: String?
   @State private var bookmarks: [Bookmark] = []
-  @State private var syphonNameText: String = ""
-  @State private var syphonNameError: String?
+  @State private var oscCommands: [OSCCommandInfo] = []
 
   var body: some View {
     Form {
-      Section("Output") {
-        Picker("Resolution", selection: $state.resolution) {
-          ForEach(OutputResolution.allCases, id: \.self) { resolution in
-            Text(resolution.label).tag(resolution)
-          }
-        }
-      }
-
-      Section("Syphon") {
-        HStack {
-          TextField("Syphon name", text: $syphonNameText)
-            .onSubmit(applySyphonName)
-          Button("Apply", action: applySyphonName)
-        }
-        if let syphonNameError {
-          Text(syphonNameError).font(.caption).foregroundStyle(.red)
-        }
-      }
-
       Section("Instances") {
         Text("Profile: \(profileName ?? "default")")
         Text(
@@ -76,15 +42,6 @@ struct SettingsView: View {
         }
       }
 
-      Section("Appearance") {
-        Toggle("Transparent background", isOn: $state.transparentBackground)
-        Text(
-          "The page must set a transparent background (e.g. body { background: transparent }). Output alpha is premultiplied."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      }
-
       Section("OSC Commands") {
         ForEach(oscCommands) { command in
           VStack(alignment: .leading, spacing: 1) {
@@ -106,24 +63,23 @@ struct SettingsView: View {
     .frame(minWidth: 420, minHeight: 480)
     .onAppear {
       portText = String(model.oscPort)
-      syphonNameText = state.name
       bookmarks = Bookmark.getAll()
+      oscCommands = oscCommandReference(outputs: model.outputs)
     }
     // The window is retained, so onAppear runs once; keep the command list current
     .onReceive(bookmarksDidChangePublisher) { _ in
       bookmarks = Bookmark.getAll()
     }
-  }
-
-  private func applySyphonName() {
-    syphonNameError = nil
-    let trimmed = syphonNameText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      syphonNameError = "Syphon name can't be empty"
-      return
+    // Outputs added/removed/renamed while Settings is open (name feeds the per-output example
+    // rows and the grandfathered-name index fallback): re-render via `model` (add/remove) and
+    // resubscribe to each current output's `$name`. `.receive(on:)` defers past `@Published`'s
+    // willSet-time emission so the read below sees the NEW name, not the old one.
+    .onReceive(
+      Publishers.MergeMany(model.outputs.map { $0.$name.map { _ in () }.eraseToAnyPublisher() })
+        .receive(on: DispatchQueue.main)
+    ) { _ in
+      oscCommands = oscCommandReference(outputs: model.outputs)
     }
-    syphonNameText = trimmed
-    state.name = trimmed
   }
 
   private func applyPort() {
