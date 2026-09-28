@@ -171,10 +171,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
   // `macwindow` tinted to the menu bar foreground, with a small filled circle at the
   // bottom-trailing corner for the status colour. See the type comment for the composition
-  // technique (adapted from Prompter's `statusImage`); the dot placement itself is this icon's own
-  // corner-badge position, not ported from that file's flood-fill measurement (which was specific
-  // to `display.2`). The canvas is padded on the bottom and trailing edges by the dot's radius so
-  // the badge sits fully on-canvas instead of being clipped by the glyph's own bounds.
+  // technique (adapted from Prompter's `statusImage`). The whole image is 18pt tall (menu bar
+  // height minus padding): the glyph is shrunk and offset so the dot, centred on its
+  // bottom-trailing corner, stays inside the canvas with a half-point margin.
   private static func statusImage(color: NSColor) -> NSImage {
     let height: CGFloat = 18
     guard
@@ -185,22 +184,23 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
     symbol.isTemplate = true
     let aspect = symbol.size.height > 0 ? symbol.size.width / symbol.size.height : 1
-    let glyphWidth = (height * aspect).rounded()
 
-    let dotDiameter = height * 0.4
-    let overhang = dotDiameter / 2
-    let size = NSSize(width: glyphWidth + overhang, height: height + overhang)
-    let glyphRect = NSRect(x: 0, y: overhang, width: glyphWidth, height: height)
-    // Dot centred on the glyph's bottom-trailing corner; canvas padding above makes it tangent
-    // to (not past) the image edges.
+    let dotDiameter: CGFloat = 7
+    let overhang = dotDiameter / 2 + 0.5
+    let glyphHeight = height - overhang
+    let glyphWidth = (glyphHeight * aspect).rounded()
+    let size = NSSize(width: glyphWidth + overhang, height: height)
+    let glyphRect = NSRect(x: 0, y: overhang, width: glyphWidth, height: glyphHeight)
     let dotRect = NSRect(
-      x: glyphWidth - overhang, y: 0, width: dotDiameter, height: dotDiameter)
+      x: glyphWidth - dotDiameter / 2, y: overhang - dotDiameter / 2,
+      width: dotDiameter, height: dotDiameter)
 
     let image = NSImage(size: size, flipped: false) { _ in
-      // Tint the template glyph with the menu bar's foreground colour: fill with it, then keep
-      // only the pixels the glyph itself covers (.destinationIn).
+      // Tint the template glyph with the menu bar's foreground colour: fill its rect, then keep
+      // only the pixels the glyph covers (.destinationIn). Filling only `glyphRect` matters:
+      // .destinationIn doesn't touch pixels outside the rect it draws into.
       NSColor.labelColor.set()
-      NSRect(origin: .zero, size: size).fill()
+      glyphRect.fill()
       symbol.draw(in: glyphRect, from: .zero, operation: .destinationIn, fraction: 1.0)
 
       // Knock a small clear ring out of the glyph where the dot will sit, so the dot reads
