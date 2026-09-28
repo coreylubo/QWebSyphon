@@ -159,8 +159,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog,
       kAEShutDown,
     ].map { UInt32($0) }
-    if let reason = NSAppleEventManager.shared().currentAppleEvent?
-      .attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue,
+    // The reason arrives as an attribute on some systems and a parameter on others; check both.
+    let event = NSAppleEventManager.shared().currentAppleEvent
+    let keyword = AEKeyword(kAEQuitReason)
+    if let reason = (event?.attributeDescriptor(forKeyword: keyword)
+      ?? event?.paramDescriptor(forKeyword: keyword))?.enumCodeValue,
       systemReasons.contains(reason)
     {
       return .terminateNow
