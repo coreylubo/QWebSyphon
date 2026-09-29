@@ -54,4 +54,12 @@ import Testing
   @Test func statusLevelOkWithNoOutputs() {
     #expect(statusLevel(outputs: [], oscListening: true) == .ok)
   }
+
+  @Test func clientsLevelRules() {
+    #expect(clientsLevel(enabledOutputsWithClients: []) == nil)
+    #expect(clientsLevel(enabledOutputsWithClients: [false, false]) == nil)
+    #expect(clientsLevel(enabledOutputsWithClients: [true, false]) == .warning)
+    #expect(clientsLevel(enabledOutputsWithClients: [true, true]) == .ok)
+    #expect(clientsLevel(enabledOutputsWithClients: [true]) == .ok)
+  }
 }

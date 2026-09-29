@@ -1,7 +1,8 @@
 import Foundation
 
-// Menu bar status level (statusMenu.swift, app side): drives the composed status-item icon's dot
-// colour and, per output, the menu row's bullet colour.
+// Menu bar status level (statusMenu.swift, app side): drives the composed status-item icon's top
+// ("in") dot colour and, per output, the menu row's bullet colour. `clientsLevel` drives the
+// bottom ("out") dot.
 public enum StatusLevel: Sendable {
   case ok
   case warning
@@ -45,4 +46,13 @@ public func statusLevel(outputs: [OutputHealth], oscListening: Bool) -> StatusLe
   if !oscListening || relevant.contains(where: \.failed) { return .error }
   if relevant.contains(where: { outputStatusLevel($0) == .warning }) { return .warning }
   return .ok
+}
+
+// Far-end ("out") level for the menu bar's bottom dot: whether Syphon clients are receiving the
+// enabled outputs. ok when every enabled output has a client; warning when only some do; nil (no
+// colour, shown grey) when none do or nothing is enabled — no clients is not a fault.
+public func clientsLevel(enabledOutputsWithClients: [Bool]) -> StatusLevel? {
+  let withClients = enabledOutputsWithClients.filter { $0 }.count
+  if withClients == 0 { return nil }
+  return withClients == enabledOutputsWithClients.count ? .ok : .warning
 }

@@ -3,10 +3,11 @@ import QWebSyphonCore
 
 // Status bar item + menu, owned by AppDelegate for the app's lifetime. Icon composition is
 // adapted from tcb-gross-prophets-osc-monitor/mac/Prompter/main.swift's `AppController.statusImage`:
-// a template SF Symbol tinted to the menu bar's current foreground colour, composited with a small
-// filled circle for the status colour, then marked non-template so the dot survives (a template
-// image would otherwise get flattened to one colour). The per-row "only the bullet is coloured"
-// treatment below is adapted from the same file's `rebuildMonitorMenuItems`.
+// a palette-tinted SF Symbol (menu bar foreground colour) composited with two small filled circles
+// stacked to its right — top "in" (OSC + pages), bottom "out" (Syphon clients) — then marked
+// non-template so the dots survive (a template image would otherwise get flattened to one
+// colour). The per-row "only the bullet is coloured" treatment below is adapted from the same
+// file's `rebuildMonitorMenuItems`.
 @available(macOS 14, *)
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
@@ -15,7 +16,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
   private let showWindow: (UUID?) -> Void
   private let showSettingsAction: () -> Void
 
-  private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+  private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
   private let menu = NSMenu()
   private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
   // Marks where the per-output rows go (inserted just before it); itself never removed.
@@ -83,8 +84,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
   }
 
   private func refreshIcon() {
-    let color = Self.nsColor(for: overallLevel())
-    statusItem.button?.image = Self.statusImage(color: color)
+    let inColor = Self.nsColor(for: overallLevel())
+    let outColor = Self.nsColor(
+      for: clientsLevel(
+        enabledOutputsWithClients: model.outputs.filter(\.enabled).map {
+          $0.frameServer?.hasClients ?? false
+        }))
+    statusItem.button?.image = Self.statusImage(in: inColor, out: outColor)
     let summary = statusSummaryText()
     statusItem.button?.toolTip = summary
     statusLine.title = summary
@@ -161,21 +167,22 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     return statusLevel(outputs: healths, oscListening: oscController.port != nil)
   }
 
-  private static func nsColor(for level: StatusLevel) -> NSColor {
+  private static func nsColor(for level: StatusLevel?) -> NSColor {
     switch level {
+    case nil: return .systemGray
     case .ok: return .systemGreen
     case .warning: return .systemOrange
     case .error: return .systemRed
     }
   }
 
-  // `macwindow` tinted to the menu bar foreground, with a small filled circle at the
-  // bottom-trailing corner for the status colour. See the type comment for the composition
-  // technique (adapted from Prompter's `statusImage`). The image fills the 22pt menu bar: the glyph
-  // is shrunk and centred vertically, with the dot's overhang reserved above as well as below so
-  // it stays balanced; the dot, centred on the glyph's bottom-trailing corner, stays inside the
-  // canvas with a half-point margin.
-  private static func statusImage(color: NSColor) -> NSImage {
+  // `macwindow` glyph with two status dots stacked in a column to its right: top = "in" (OSC
+  // listener + web pages), bottom = "out" (Syphon clients). See the type comment for the
+  // composition technique. The glyph is shrunk and centred vertically to match QBridge's
+  // `StatusItemController.statusImage(in:out:)`; the dots don't touch it, so no knockout is needed.
+  // The glyph is palette-tinted rather than drawn then filled with a masked rect: a fill at the
+  // glyph's fractional y left a hairline box.
+  static func statusImage(in inColor: NSColor, out outColor: NSColor) -> NSImage {
     let height: CGFloat = 22
     guard
       let symbol = NSImage(
@@ -186,38 +193,28 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     symbol.isTemplate = true
     let aspect = symbol.size.height > 0 ? symbol.size.width / symbol.size.height : 1
 
-    let dotDiameter: CGFloat = 6.5
-    let overhang = dotDiameter / 2 + 0.5
+    let dotDiameter: CGFloat = 5
+    let gap: CGFloat = 1.5
+    let overhang: CGFloat = 3.75
     let glyphHeight = height - 2 * overhang
     let glyphWidth = (glyphHeight * aspect).rounded()
-    let size = NSSize(width: glyphWidth + overhang, height: height)
     let glyphRect = NSRect(x: 0, y: overhang, width: glyphWidth, height: glyphHeight)
-    let dotRect = NSRect(
-      x: glyphWidth - dotDiameter / 2, y: overhang - dotDiameter / 2,
-      width: dotDiameter, height: dotDiameter)
+
+    let columnHeight = dotDiameter * 2 + gap
+    let columnX = glyphWidth + gap
+    let bottomY = (height - columnHeight) / 2
+    let bottomDotRect = NSRect(x: columnX, y: bottomY, width: dotDiameter, height: dotDiameter)
+    let topDotRect = NSRect(
+      x: columnX, y: bottomY + dotDiameter + gap, width: dotDiameter, height: dotDiameter)
+    let size = NSSize(width: columnX + dotDiameter, height: height)
 
     let image = NSImage(size: size, flipped: false) { _ in
-      // Tint the template glyph with the menu bar's foreground colour: draw it, then recolour only
-      // the pixels it covers (.sourceIn), keeping its alpha. Filling first and masking with
-      // .destinationIn left a hairline box: glyphRect sits at a fractional y, so the fill's
-      // antialiased edge survived the mask. With .sourceIn that edge lands on clear pixels and
-      // stays clear. A single-colour palette configuration would avoid compositing but paints the
-      // symbol's translucent layers solid.
-      symbol.draw(in: glyphRect)
-      NSColor.labelColor.set()
-      glyphRect.fill(using: .sourceIn)
-
-      // Knock a small clear ring out of the glyph where the dot will sit, so the dot reads
-      // against the glyph instead of touching its tinted pixels.
-      let gap: CGFloat = 1.2
-      let ringRect = dotRect.insetBy(dx: -gap, dy: -gap)
-      NSColor.black.setFill()
-      NSGraphicsContext.current?.compositingOperation = .destinationOut
-      NSBezierPath(ovalIn: ringRect).fill()
-      NSGraphicsContext.current?.compositingOperation = .sourceOver
-
-      color.setFill()
-      NSBezierPath(ovalIn: dotRect).fill()
+      (symbol.withSymbolConfiguration(.init(paletteColors: [.labelColor])) ?? symbol)
+        .draw(in: glyphRect)
+      inColor.setFill()
+      NSBezierPath(ovalIn: topDotRect).fill()
+      outColor.setFill()
+      NSBezierPath(ovalIn: bottomDotRect).fill()
       return true
     }
     image.isTemplate = false
