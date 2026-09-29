@@ -56,3 +56,29 @@ public func clientsLevel(enabledOutputsWithClients: [Bool]) -> StatusLevel? {
   if withClients == 0 { return nil }
   return withClients == enabledOutputsWithClients.count ? .ok : .warning
 }
+
+// Tooltip text for the top ("in") dot. Mirrors `statusLevel`'s precedence so the text never
+// contradicts the dot colour: OSC down, then failed (error), then loading, then slow (warning).
+// Each output is counted once, under its highest-precedence condition.
+public func inStatusText(outputs: [OutputHealth], oscListening: Bool) -> String {
+  if !oscListening { return "OSC not listening" }
+  let enabled = outputs.filter(\.enabled)
+  let m = enabled.count
+  let failed = enabled.filter(\.failed).count
+  if failed > 0 { return "\(failed) of \(m) pages failed to load" }
+  let loading = enabled.filter(\.loading).count
+  if loading > 0 { return "\(loading) of \(m) pages loading" }
+  let slow = enabled.filter { $0.fps < 55 }.count
+  if slow > 0 { return "\(slow) of \(m) outputs under 55 fps" }
+  return m == 0 ? "OSC listening, no outputs enabled" : "OSC listening, pages loaded"
+}
+
+// Tooltip text for the bottom ("out") dot; mirrors `clientsLevel`.
+public func outStatusText(enabledOutputsWithClients: [Bool]) -> String {
+  let m = enabledOutputsWithClients.count
+  let n = enabledOutputsWithClients.filter { $0 }.count
+  if m == 0 { return "No outputs enabled" }
+  if n == 0 { return "No Syphon clients" }
+  if m == 1 { return "Output has Syphon clients" }
+  return n == m ? "All \(m) outputs have Syphon clients" : "\(n) of \(m) outputs have Syphon clients"
+}

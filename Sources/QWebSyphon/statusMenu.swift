@@ -84,15 +84,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
   }
 
   private func refreshIcon() {
-    let inColor = Self.nsColor(for: overallLevel())
-    let outColor = Self.nsColor(
-      for: clientsLevel(
-        enabledOutputsWithClients: model.outputs.filter(\.enabled).map {
-          $0.frameServer?.hasClients ?? false
-        }))
+    let healths = model.outputs.map {
+      OutputHealth(
+        loading: $0.loading, failed: $0.loadError != nil, fps: $0.stats.fps, enabled: $0.enabled)
+    }
+    let oscListening = oscController.port != nil
+    let withClients = model.outputs.filter(\.enabled).map { $0.frameServer?.hasClients ?? false }
+    let inColor = Self.nsColor(for: statusLevel(outputs: healths, oscListening: oscListening))
+    let outColor = Self.nsColor(for: clientsLevel(enabledOutputsWithClients: withClients))
     statusItem.button?.image = Self.statusImage(in: inColor, out: outColor)
     let summary = statusSummaryText()
-    statusItem.button?.toolTip = summary
+    let inText = inStatusText(outputs: healths, oscListening: oscListening)
+    let outText = outStatusText(enabledOutputsWithClients: withClients)
+    statusItem.button?.toolTip = [summary, "Top (in): \(inText)", "Bottom (out): \(outText)"]
+      .joined(separator: "\n")
     statusLine.title = summary
   }
 
@@ -157,14 +162,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     let withClients = model.outputs.filter { $0.frameServer?.hasClients ?? false }.count
     let oscText = oscController.port.map { "OSC \($0)" } ?? oscController.status
     return "\(profilePrefix)\(n) outputs · \(withClients) with clients · \(oscText)"
-  }
-
-  private func overallLevel() -> StatusLevel {
-    let healths = model.outputs.map {
-      OutputHealth(
-        loading: $0.loading, failed: $0.loadError != nil, fps: $0.stats.fps, enabled: $0.enabled)
-    }
-    return statusLevel(outputs: healths, oscListening: oscController.port != nil)
   }
 
   private static func nsColor(for level: StatusLevel?) -> NSColor {
