@@ -1,6 +1,7 @@
 // Generates the app icon: a black gradient tile with the menu bar icon on it (`macwindow` glyph,
-// green status dot, clear ring around the dot), in the same proportions as `statusImage` in
-// Sources/QWebSyphon/statusMenu.swift. Writes the .icns into the app skeleton, plus the layer
+// green status dot, clear ring around the dot), in the proportions of the original single-dot
+// menu bar icon. The menu bar icon (`statusImage` in Sources/QWebSyphon/statusMenu.swift) has
+// since moved to two stacked dots; the app icon deliberately keeps the single dot. Writes the .icns into the app skeleton, plus the layer
 // PNGs of the Icon Composer document app_bundler/QWebSyphon.icon (its icon.json is
 // hand-maintained; open it in Icon Composer to tweak glass/shadow). build_app.sh compiles the
 // .icon with actool.
