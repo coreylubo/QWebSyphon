@@ -60,6 +60,11 @@ import Testing
       -> OutputHealth
     { OutputHealth(loading: loading, failed: failed, fps: fps, enabled: enabled) }
 
+    // Singular when only one output is enabled
+    #expect(inStatusText(outputs: [h(false, true)], oscListening: true) == "1 of 1 page failed to load")
+    #expect(inStatusText(outputs: [h(true)], oscListening: true) == "1 of 1 page loading")
+    #expect(inStatusText(outputs: [h(false, false, 40)], oscListening: true) == "1 of 1 output under 55 fps")
+
     // OSC down beats everything
     #expect(inStatusText(outputs: [h(false, true)], oscListening: false) == "OSC not listening")
     #expect(

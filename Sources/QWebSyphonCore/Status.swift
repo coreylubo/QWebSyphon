@@ -65,11 +65,11 @@ public func inStatusText(outputs: [OutputHealth], oscListening: Bool) -> String 
   let enabled = outputs.filter(\.enabled)
   let m = enabled.count
   let failed = enabled.filter(\.failed).count
-  if failed > 0 { return "\(failed) of \(m) pages failed to load" }
+  if failed > 0 { return "\(failed) of \(m) \(m == 1 ? "page" : "pages") failed to load" }
   let loading = enabled.filter(\.loading).count
-  if loading > 0 { return "\(loading) of \(m) pages loading" }
+  if loading > 0 { return "\(loading) of \(m) \(m == 1 ? "page" : "pages") loading" }
   let slow = enabled.filter { $0.fps < 55 }.count
-  if slow > 0 { return "\(slow) of \(m) outputs under 55 fps" }
+  if slow > 0 { return "\(slow) of \(m) \(m == 1 ? "output" : "outputs") under 55 fps" }
   return m == 0 ? "OSC listening, no outputs enabled" : "OSC listening, pages loaded"
 }
 
