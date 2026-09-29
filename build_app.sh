@@ -36,6 +36,26 @@ if ! xcrun actool "$ROOT/app_bundler/QWebSyphon.icon" --compile "$ROOT/QWebSypho
 fi
 cp app_bundler/QWebSyphon.app.skeleton/Contents/Resources/QWebSyphon.icns ./QWebSyphon.app/Contents/Resources/QWebSyphon.icns
 
+echo "Stamping version... 🏷️"
+PLIST=./QWebSyphon.app/Contents/Info.plist
+# Falls back to the skeleton's CFBundleShortVersionString when there's no tag.
+if TAG="$(git describe --tags --abbrev=0 2>/dev/null)"; then
+  SHORT_VERSION="${TAG#v}"
+else
+  SHORT_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")"
+fi
+BUILD_NUMBER="$(git rev-list --count HEAD)"
+COMMIT="$(git rev-parse --short HEAD)"
+# QWebSyphon.app/ is gitignored, so it never makes the tree look dirty.
+[ -n "$(git status --porcelain)" ] && COMMIT="$COMMIT-dirty"
+for kv in "CFBundleShortVersionString:$SHORT_VERSION" "CFBundleVersion:$BUILD_NUMBER" "QWSGitCommit:$COMMIT"; do
+  key="${kv%%:*}"
+  value="${kv#*:}"
+  /usr/libexec/PlistBuddy -c "Set :$key $value" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :$key string $value" "$PLIST"
+done
+echo "Version $SHORT_VERSION ($BUILD_NUMBER, $COMMIT)"
+
 echo "Signing (ad hoc)... ✍️"
 # install_name_tool invalidates the linker's signature; Apple silicon won't run it unsigned
 codesign --force --deep --sign - ./QWebSyphon.app
