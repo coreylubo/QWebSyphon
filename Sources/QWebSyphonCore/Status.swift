@@ -10,8 +10,8 @@ public enum StatusLevel: Sendable {
 }
 
 // Just enough of one output's live state to classify it: whether its page is still loading,
-// whether it failed to load, and its current fps. No `hasClients` — the level rules below don't
-// use client presence.
+// whether it failed to load, and its current fps. No `hasClients` — `outputStatusLevel` and
+// `statusLevel` don't use client presence; `clientsLevel` covers that separately.
 public struct OutputHealth: Sendable {
   public var loading: Bool
   public var failed: Bool
