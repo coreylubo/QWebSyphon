@@ -108,27 +108,32 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     let oscListening = oscController.port != nil
     let withClients = model.outputs.filter(\.enabled).map { $0.frameServer?.hasClients ?? false }
     let level = statusLevel(outputs: healths, oscListening: oscListening)
-    postHUDStatus(level: level, healths: healths)
     let inColor = Self.nsColor(for: level)
     let outColor = Self.nsColor(for: clientsLevel(enabledOutputsWithClients: withClients))
     statusItem.button?.image = Self.statusImage(in: inColor, out: outColor)
     let summary = statusSummaryText()
     let inText = inStatusText(outputs: healths, oscListening: oscListening)
     let outText = outStatusText(enabledOutputsWithClients: withClients)
-    statusItem.button?.toolTip = [summary, "Top (in): \(inText)", "Bottom (out): \(outText)"]
-      .joined(separator: "\n")
+    postHUDStatus(
+      inLevel: level, inText: inText, outLevel: clientsLevel(enabledOutputsWithClients: withClients),
+      outText: outText, healths: healths)
+    statusItem.button?.toolTip = [summary, inText, outText].joined(separator: "\n")
     statusLine.title = summary
-    inLine.title = "Top dot: \(inText)"
+    inLine.title = inText
     inLine.image = Self.dotImage(inColor)
-    outLine.title = "Bottom dot: \(outText)"
+    outLine.title = outText
     outLine.image = Self.dotImage(outColor)
   }
 
-  private func postHUDStatus(level: StatusLevel, healths: [OutputHealth]) {
+  private func postHUDStatus(
+    inLevel: StatusLevel, inText: String, outLevel: StatusLevel?, outText: String,
+    healths: [OutputHealth]
+  ) {
     let outputs = zip(model.outputs, healths).map {
       HUDOutput(name: $0.name, health: $1, hasClients: $0.frameServer?.hasClients ?? false)
     }
-    let payload = HUDStatus.payload(level: level, oscPort: oscController.port, outputs: outputs) as NSDictionary
+    let payload = HUDStatus.payload(
+      inLevel: inLevel, inText: inText, outLevel: outLevel, outText: outText, oscPort: oscController.port, outputs: outputs) as NSDictionary
     guard payload != lastHUDPayload || Date().timeIntervalSince(lastHUDPost) >= 5 else { return }
     lastHUDPayload = payload
     lastHUDPost = Date()
