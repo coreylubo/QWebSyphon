@@ -88,3 +88,37 @@ public func versionText(version: String?, commit: String?, date: String?) -> Str
   let detail = [commit, date].compactMap { $0 }.joined(separator: " · ")
   return detail.isEmpty ? "Version \(version)" : "Version \(version) (\(detail))"
 }
+
+// One enabled output's line for the HUD (co.gr8x.hud.status).
+public struct HUDOutput: Sendable {
+  public var name: String
+  public var health: OutputHealth
+  public var hasClients: Bool
+
+  public init(name: String, health: OutputHealth, hasClients: Bool) {
+    self.name = name
+    self.health = health
+    self.hasClients = hasClients
+  }
+}
+
+// userInfo for the HUD status notification: plist types only. Disabled outputs are omitted.
+public enum HUDStatus {
+  public static func payload(level: StatusLevel, oscPort: UInt16?, outputs: [HUDOutput]) -> [String: Any] {
+    let dot: String
+    switch level {
+    case .ok: dot = "green"
+    case .warning: dot = "amber"
+    case .error: dot = "red"
+    }
+    let lines = outputs.filter(\.health.enabled).prefix(6).map { o -> String in
+      let state = o.health.failed ? "Failed" : (o.health.loading ? "Loading" : "Loaded")
+      return "\(o.name)  \(o.health.fps)fps  \(o.hasClients ? "client" : "no client")  \(state)"
+    }
+    return [
+      "dots": [dot],
+      "summary": oscPort.map { "OSC :\($0)" } ?? "OSC not listening",
+      "lines": Array(lines),
+    ]
+  }
+}
