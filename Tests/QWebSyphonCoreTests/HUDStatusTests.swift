@@ -24,4 +24,10 @@ import Testing
     #expect((HUDStatus.payload(level: .warning, oscPort: 1, outputs: many)["lines"] as? [String])?.count == 6)
     #expect(HUDStatus.payload(level: .warning, oscPort: 1, outputs: [])["dots"] as? [String] == ["amber"])
   }
+
+  @Test func sourceNamesProfile() {
+    #expect(HUDStatus.source(profile: nil) == "QWebSyphon")
+    #expect(HUDStatus.source(profile: "  ") == "QWebSyphon")
+    #expect(HUDStatus.source(profile: " stage ") == "QWebSyphon stage")
+  }
 }

@@ -104,6 +104,12 @@ public struct HUDOutput: Sendable {
 
 // userInfo for the HUD status notification: plist types only. Disabled outputs are omitted.
 public enum HUDStatus {
+  // Notification object: distinguishes concurrent --profile instances.
+  public static func source(profile: String?) -> String {
+    let name = profile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return name.isEmpty ? "QWebSyphon" : "QWebSyphon \(name)"
+  }
+
   public static func payload(level: StatusLevel, oscPort: UInt16?, outputs: [HUDOutput]) -> [String: Any] {
     let dot: String
     switch level {

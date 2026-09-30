@@ -133,7 +133,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     lastHUDPayload = payload
     lastHUDPost = Date()
     DistributedNotificationCenter.default().postNotificationName(
-      .init("co.gr8x.hud.status"), object: "QWebSyphon", userInfo: payload as? [AnyHashable: Any],
+      .init("co.gr8x.hud.status"), object: HUDStatus.source(profile: profileName), userInfo: payload as? [AnyHashable: Any],
       deliverImmediately: true)
   }
 
