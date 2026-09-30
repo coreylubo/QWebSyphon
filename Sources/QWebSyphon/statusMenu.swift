@@ -19,6 +19,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
   private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
   private let menu = NSMenu()
   private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+  // One line per menu-bar dot, each with a matching coloured dot so the icon is self-explaining.
+  private let inLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+  private let outLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
   // Marks where the per-output rows go (inserted just before it); itself never removed.
   private let rowsEndMarker = NSMenuItem.separator()
 
@@ -39,6 +42,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     menu.delegate = self
     statusItem.menu = menu
 
+    // Legend rows are enabled (opening the window) because AppKit dims images on disabled items,
+    // which would make the dots differ from the icon's.
+    for line in [inLine, outLine] {
+      line.action = #selector(showWindowTapped)
+      line.target = self
+      menu.addItem(line)
+    }
     statusLine.isEnabled = false
     menu.addItem(statusLine)
     menu.addItem(.separator())
@@ -55,6 +65,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     menu.addItem(settingsItem)
 
     menu.addItem(.separator())
+
+    let versionItem = NSMenuItem(title: Self.versionText(), action: nil, keyEquivalent: "")
+    versionItem.isEnabled = false
+    menu.addItem(versionItem)
 
     let quitItem = NSMenuItem(
       title: "Quit QWebSyphon", action: #selector(quitTapped), keyEquivalent: "")
@@ -99,6 +113,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     statusItem.button?.toolTip = [summary, "Top (in): \(inText)", "Bottom (out): \(outText)"]
       .joined(separator: "\n")
     statusLine.title = summary
+    inLine.title = "Top dot: \(inText)"
+    inLine.image = Self.dotImage(inColor)
+    outLine.title = "Bottom dot: \(outText)"
+    outLine.image = Self.dotImage(outColor)
+  }
+
+  // Stamped into Info.plist by build_app.sh; absent under `swift run`.
+  private static func versionText() -> String {
+    let info = Bundle.main.infoDictionary
+    return QWebSyphonCore.versionText(
+      version: info?["CFBundleShortVersionString"] as? String,
+      commit: info?["QWSGitCommit"] as? String, date: info?["QWSBuildDate"] as? String)
   }
 
   private func rebuildOutputRows() {
@@ -212,6 +238,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
       NSBezierPath(ovalIn: topDotRect).fill()
       outColor.setFill()
       NSBezierPath(ovalIn: bottomDotRect).fill()
+      return true
+    }
+    image.isTemplate = false
+    return image
+  }
+
+  static func dotImage(_ color: NSColor) -> NSImage {
+    let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
+      color.setFill()
+      NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
       return true
     }
     image.isTemplate = false
