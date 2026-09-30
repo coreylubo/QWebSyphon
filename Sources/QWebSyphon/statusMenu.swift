@@ -27,6 +27,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
   private var outputItems: [NSMenuItem] = []
   private var timer: Timer?
+  // HUD sender state: last posted payload + time (post on change, and every 5 s as heartbeat).
+  private var lastHUDPayload: NSDictionary?
+  private var lastHUDPost = Date.distantPast
 
   init(
     model: AppModel, oscController: OSCController,
@@ -104,7 +107,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
     let oscListening = oscController.port != nil
     let withClients = model.outputs.filter(\.enabled).map { $0.frameServer?.hasClients ?? false }
-    let inColor = Self.nsColor(for: statusLevel(outputs: healths, oscListening: oscListening))
+    let level = statusLevel(outputs: healths, oscListening: oscListening)
+    postHUDStatus(level: level, healths: healths)
+    let inColor = Self.nsColor(for: level)
     let outColor = Self.nsColor(for: clientsLevel(enabledOutputsWithClients: withClients))
     statusItem.button?.image = Self.statusImage(in: inColor, out: outColor)
     let summary = statusSummaryText()
@@ -117,6 +122,19 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     inLine.image = Self.dotImage(inColor)
     outLine.title = "Bottom dot: \(outText)"
     outLine.image = Self.dotImage(outColor)
+  }
+
+  private func postHUDStatus(level: StatusLevel, healths: [OutputHealth]) {
+    let outputs = zip(model.outputs, healths).map {
+      HUDOutput(name: $0.name, health: $1, hasClients: $0.frameServer?.hasClients ?? false)
+    }
+    let payload = HUDStatus.payload(level: level, oscPort: oscController.port, outputs: outputs) as NSDictionary
+    guard payload != lastHUDPayload || Date().timeIntervalSince(lastHUDPost) >= 5 else { return }
+    lastHUDPayload = payload
+    lastHUDPost = Date()
+    DistributedNotificationCenter.default().postNotificationName(
+      .init("co.gr8x.hud.status"), object: HUDStatus.source(profile: profileName), userInfo: payload as? [AnyHashable: Any],
+      deliverImmediately: true)
   }
 
   // Stamped into Info.plist by build_app.sh; absent under `swift run`.
