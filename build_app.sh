@@ -38,23 +38,19 @@ cp app_bundler/QWebSyphon.app.skeleton/Contents/Resources/QWebSyphon.icns ./QWeb
 
 echo "Stamping version... 🏷️"
 PLIST=./QWebSyphon.app/Contents/Info.plist
-# Falls back to the skeleton's CFBundleShortVersionString when there's no tag.
-if TAG="$(git describe --tags --abbrev=0 2>/dev/null)"; then
-  SHORT_VERSION="${TAG#v}"
-else
-  SHORT_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")"
-fi
 BUILD_NUMBER="$(git rev-list --count HEAD)"
+SHORT_VERSION="1.0.$BUILD_NUMBER"
+BUILD_DATE="$(date '+%Y-%m-%d %H:%M')"
 COMMIT="$(git rev-parse --short HEAD)"
 # QWebSyphon.app/ is gitignored, so it never makes the tree look dirty.
 [ -n "$(git status --porcelain)" ] && COMMIT="$COMMIT-dirty"
-for kv in "CFBundleShortVersionString:$SHORT_VERSION" "CFBundleVersion:$BUILD_NUMBER" "QWSGitCommit:$COMMIT"; do
+for kv in "CFBundleShortVersionString:$SHORT_VERSION" "CFBundleVersion:$BUILD_NUMBER" "QWSGitCommit:$COMMIT" "QWSBuildDate:$BUILD_DATE"; do
   key="${kv%%:*}"
   value="${kv#*:}"
-  /usr/libexec/PlistBuddy -c "Set :$key $value" "$PLIST" 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :$key string $value" "$PLIST"
+  /usr/libexec/PlistBuddy -c "Set :$key '$value'" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :$key string '$value'" "$PLIST"
 done
-echo "Version $SHORT_VERSION ($BUILD_NUMBER, $COMMIT)"
+echo "Built QWebSyphon $SHORT_VERSION ($COMMIT · $BUILD_DATE)"
 
 echo "Signing (ad hoc)... ✍️"
 # install_name_tool invalidates the linker's signature; Apple silicon won't run it unsigned

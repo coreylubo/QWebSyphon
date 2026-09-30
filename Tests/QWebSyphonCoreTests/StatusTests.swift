@@ -119,4 +119,12 @@ import Testing
     #expect(clientsLevel(enabledOutputsWithClients: [true, true]) == .ok)
     #expect(clientsLevel(enabledOutputsWithClients: [true]) == .ok)
   }
+
+  @Test func versionTextCases() {
+    #expect(
+      versionText(version: "1.0.42", commit: "abc1234", date: "2026-09-29 10:00")
+        == "Version 1.0.42 (abc1234 · 2026-09-29 10:00)")
+    #expect(versionText(version: "1.0.42", commit: nil, date: nil) == "Version 1.0.42")
+    #expect(versionText(version: nil, commit: "abc1234", date: "x") == "Version unknown")
+  }
 }

@@ -42,10 +42,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     menu.delegate = self
     statusItem.menu = menu
 
-    for line in [inLine, outLine, statusLine] {
-      line.isEnabled = false
+    // Legend rows are enabled (opening the window) because AppKit dims images on disabled items,
+    // which would make the dots differ from the icon's.
+    for line in [inLine, outLine] {
+      line.action = #selector(showWindowTapped)
+      line.target = self
       menu.addItem(line)
     }
+    statusLine.isEnabled = false
+    menu.addItem(statusLine)
     menu.addItem(.separator())
     menu.addItem(rowsEndMarker)
 
@@ -59,11 +64,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     settingsItem.target = self
     menu.addItem(settingsItem)
 
+    menu.addItem(.separator())
+
     let versionItem = NSMenuItem(title: Self.versionText(), action: nil, keyEquivalent: "")
     versionItem.isEnabled = false
     menu.addItem(versionItem)
-
-    menu.addItem(.separator())
 
     let quitItem = NSMenuItem(
       title: "Quit QWebSyphon", action: #selector(quitTapped), keyEquivalent: "")
@@ -108,19 +113,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     statusItem.button?.toolTip = [summary, "Top (in): \(inText)", "Bottom (out): \(outText)"]
       .joined(separator: "\n")
     statusLine.title = summary
-    inLine.title = "Top dot (in): \(inText)"
+    inLine.title = "Top dot: \(inText)"
     inLine.image = Self.dotImage(inColor)
-    outLine.title = "Bottom dot (out): \(outText)"
+    outLine.title = "Bottom dot: \(outText)"
     outLine.image = Self.dotImage(outColor)
   }
 
   // Stamped into Info.plist by build_app.sh; absent under `swift run`.
   private static func versionText() -> String {
     let info = Bundle.main.infoDictionary
-    guard let build = info?["CFBundleVersion"] as? String else { return "Development build" }
-    let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-    let commit = info?["QWSGitCommit"] as? String ?? "unknown"
-    return "Version \(short) (\(build)) · \(commit)"
+    return QWebSyphonCore.versionText(
+      version: info?["CFBundleShortVersionString"] as? String,
+      commit: info?["QWSGitCommit"] as? String, date: info?["QWSBuildDate"] as? String)
   }
 
   private func rebuildOutputRows() {

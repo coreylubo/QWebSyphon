@@ -82,3 +82,9 @@ public func outStatusText(enabledOutputsWithClients: [Bool]) -> String {
   if m == 1 { return "Output has Syphon clients" }
   return n == m ? "All \(m) outputs have Syphon clients" : "\(n) of \(m) outputs have Syphon clients"
 }
+
+public func versionText(version: String?, commit: String?, date: String?) -> String {
+  guard let version else { return "Version unknown" }
+  let detail = [commit, date].compactMap { $0 }.joined(separator: " · ")
+  return detail.isEmpty ? "Version \(version)" : "Version \(version) (\(detail))"
+}
