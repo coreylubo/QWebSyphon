@@ -124,7 +124,7 @@ public enum HUDStatus {
       case nil: return "gray"
       }
     }
-    let rows: [[String: Any]] = outputs.filter(\.health.enabled).prefix(6).map { o in
+    let rows: [[String: Any]] = outputs.filter(\.health.enabled).prefix(8).map { o in
       let state = o.health.failed ? "Failed" : (o.health.loading ? "Loading" : "Loaded")
       return [
         "label": o.name,

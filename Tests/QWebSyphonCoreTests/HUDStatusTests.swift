@@ -32,7 +32,7 @@ import Testing
     let rows = p["rows"] as? [[String: Any]]
     #expect(rows?.count == 1)
     #expect(rows?[0]["value"] as? String == "60fps · client · Failed")
-    #expect((pay(.ok, .ok, (0..<9).map { out("O\($0)") })["rows"] as? [[String: Any]])?.count == 6)
+    #expect((pay(.ok, .ok, (0..<9).map { out("O\($0)") })["rows"] as? [[String: Any]])?.count == 8)
     #expect((pay(.warning, .ok, [])["dots"] as? [[String: String]])?[0]["color"] == "amber")
   }
 
