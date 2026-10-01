@@ -110,21 +110,32 @@ public enum HUDStatus {
     return name.isEmpty ? "QWebSyphon" : "QWebSyphon \(name)"
   }
 
-  public static func payload(level: StatusLevel, oscPort: UInt16?, outputs: [HUDOutput]) -> [String: Any] {
-    let dot: String
-    switch level {
-    case .ok: dot = "green"
-    case .warning: dot = "amber"
-    case .error: dot = "red"
+  // v2 (/tmp/hud-protocol-v2.md): dots carry colour + the same text the menu legend shows.
+  // `outLevel` nil = no clients / nothing enabled, sent as "gray".
+  public static func payload(
+    inLevel: StatusLevel, inText: String, outLevel: StatusLevel?, outText: String,
+    oscPort: UInt16?, outputs: [HUDOutput]
+  ) -> [String: Any] {
+    func color(_ l: StatusLevel?) -> String {
+      switch l {
+      case .ok: return "green"
+      case .warning: return "amber"
+      case .error: return "red"
+      case nil: return "gray"
+      }
     }
-    let lines = outputs.filter(\.health.enabled).prefix(6).map { o -> String in
+    let rows: [[String: Any]] = outputs.filter(\.health.enabled).prefix(8).map { o in
       let state = o.health.failed ? "Failed" : (o.health.loading ? "Loading" : "Loaded")
-      return "\(o.name)  \(o.health.fps)fps  \(o.hasClients ? "client" : "no client")  \(state)"
+      return [
+        "label": o.name,
+        "value": "\(o.health.fps)fps · \(o.hasClients ? "client" : "no client") · \(state)",
+        "wide": true,
+      ]
     }
     return [
-      "dots": [dot],
+      "dots": [["color": color(inLevel), "text": inText], ["color": color(outLevel), "text": outText]],
       "summary": oscPort.map { "OSC :\($0)" } ?? "OSC not listening",
-      "lines": Array(lines),
+      "rows": rows,
     ]
   }
 }

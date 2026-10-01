@@ -8,21 +8,32 @@ import Testing
       hasClients: clients)
   }
 
+  private func pay(_ inL: StatusLevel = .ok, _ outL: StatusLevel? = .ok, port: UInt16? = 9000, _ outs: [HUDOutput]) -> [String: Any] {
+    HUDStatus.payload(inLevel: inL, inText: "in txt", outLevel: outL, outText: "out txt", oscPort: port, outputs: outs)
+  }
+
   @Test func listeningOk() {
-    let p = HUDStatus.payload(level: .ok, oscPort: 9000, outputs: [out("A"), out("B", loading: true, clients: false)])
-    #expect(p["dots"] as? [String] == ["green"])
+    let p = pay(.ok, .warning, [out("A"), out("B", loading: true, clients: false)])
+    #expect(p["dots"] as? [[String: String]] == [["color": "green", "text": "in txt"], ["color": "amber", "text": "out txt"]])
     #expect(p["summary"] as? String == "OSC :9000")
-    #expect(p["lines"] as? [String] == ["A  60fps  client  Loaded", "B  60fps  no client  Loading"])
+    let rows = p["rows"] as? [[String: Any]]
+    #expect(rows?.count == 2)
+    #expect(rows?[0]["label"] as? String == "A")
+    #expect(rows?[0]["value"] as? String == "60fps · client · Loaded")
+    #expect(rows?[0]["wide"] as? Bool == true)
+    #expect(rows?[1]["value"] as? String == "60fps · no client · Loading")
+    #expect(p["lines"] == nil)
   }
 
   @Test func notListeningFailedDisabledAndCap() {
-    let p = HUDStatus.payload(level: .error, oscPort: nil, outputs: [out("X", failed: true), out("Off", enabled: false)])
-    #expect(p["dots"] as? [String] == ["red"])
+    let p = pay(.error, nil, port: nil, [out("X", failed: true), out("Off", enabled: false)])
+    #expect((p["dots"] as? [[String: String]])?.map { $0["color"] } == ["red", "gray"])
     #expect(p["summary"] as? String == "OSC not listening")
-    #expect(p["lines"] as? [String] == ["X  60fps  client  Failed"])
-    let many = (0..<9).map { out("O\($0)") }
-    #expect((HUDStatus.payload(level: .warning, oscPort: 1, outputs: many)["lines"] as? [String])?.count == 6)
-    #expect(HUDStatus.payload(level: .warning, oscPort: 1, outputs: [])["dots"] as? [String] == ["amber"])
+    let rows = p["rows"] as? [[String: Any]]
+    #expect(rows?.count == 1)
+    #expect(rows?[0]["value"] as? String == "60fps · client · Failed")
+    #expect((pay(.ok, .ok, (0..<9).map { out("O\($0)") })["rows"] as? [[String: Any]])?.count == 8)
+    #expect((pay(.warning, .ok, [])["dots"] as? [[String: String]])?[0]["color"] == "amber")
   }
 
   @Test func sourceNamesProfile() {
