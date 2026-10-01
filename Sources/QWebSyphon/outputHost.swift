@@ -34,6 +34,8 @@ final class OutputHost {
     window.level = .screenSaver
     window.isReleasedWhenClosed = false
     window.hasShadow = false
+    // ⌘H must not hide it: hidden hosting stops painting, freezing every output
+    window.canHide = false
     layoutWindow()
     window.orderFrontRegardless()
 
