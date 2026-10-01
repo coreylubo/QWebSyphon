@@ -38,6 +38,11 @@ cp app_bundler/QWebSyphon.app.skeleton/Contents/Resources/QWebSyphon.icns ./QWeb
 
 echo "Stamping version... 🏷️"
 PLIST=./QWebSyphon.app/Contents/Info.plist
+# The build number is the commit count, which a shallow clone undercounts.
+if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+  echo "Shallow clone: run 'git fetch --unshallow' so the build number is right" >&2
+  exit 1
+fi
 BUILD_NUMBER="$(git rev-list --count HEAD)"
 SHORT_VERSION="1.0.$BUILD_NUMBER"
 BUILD_DATE="$(date '+%Y-%m-%d %H:%M')"
