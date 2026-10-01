@@ -218,6 +218,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     appMenu.addItem(
       NSMenuItem(
+        title: "Hide QWebSyphon", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+    let hideOthersItem = NSMenuItem(
+      title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
+      keyEquivalent: "h")
+    hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+    appMenu.addItem(hideOthersItem)
+    appMenu.addItem(
+      NSMenuItem(
+        title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+        keyEquivalent: ""))
+    appMenu.addItem(NSMenuItem.separator())
+
+    appMenu.addItem(
+      NSMenuItem(
         title: "Quit QWebSyphon", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     )
 
